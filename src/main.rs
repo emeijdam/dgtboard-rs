@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use dgtboard::{Board, DgtBoard, Event};
+use dgtboard::{Board, DgtBoard, Event, MoveTracker};
 use serialport::SerialPortType;
 
 #[derive(Parser)]
@@ -27,8 +27,17 @@ enum Command {
         #[arg(short, long)]
         flip: bool,
     },
-    /// Connect and continuously print position changes as pieces move.
+    /// Connect and continuously print raw per-square changes as pieces move.
     Watch {
+        /// Serial port path. Auto-detected if omitted.
+        #[arg(short, long)]
+        port: Option<String>,
+        /// Read the board rotated 180° (White at the end away from the cable).
+        #[arg(short, long)]
+        flip: bool,
+    },
+    /// Connect and print detected chess moves (UCI + description) as they're played.
+    Moves {
         /// Serial port path. Auto-detected if omitted.
         #[arg(short, long)]
         port: Option<String>,
@@ -43,6 +52,7 @@ fn main() -> Result<()> {
         Command::List => list_ports(),
         Command::Snapshot { port, flip } => snapshot(port, flip),
         Command::Watch { port, flip } => watch(port, flip),
+        Command::Moves { port, flip } => moves(port, flip),
     }
 }
 
@@ -179,6 +189,52 @@ fn watch(port: Option<String>, flip: bool) -> Result<()> {
             Some(Event::SerialNumber(sn)) => println!("Serial: {sn}\n"),
             Some(Event::Clock(_)) => { /* ignore clock traffic */ }
             Some(Event::Other { .. }) => { /* ignore unmodelled messages */ }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+fn moves(port: Option<String>, flip: bool) -> Result<()> {
+    let path = pick_port(port)?;
+    let mut board = DgtBoard::open(&path)
+        .with_context(|| format!("opening {path}"))?
+        .flipped(flip);
+
+    // Seed the tracker from the current position.
+    let start = board
+        .snapshot(Duration::from_secs(3))
+        .context("reading initial board (is the board powered and connected?)")?;
+    println!("Starting position:");
+    print_board(&start);
+    let mut tracker = MoveTracker::new(start);
+    match tracker.side_to_move() {
+        Some(side) => println!("{side} to move.\n"),
+        None => println!("(Not the standard start \u{2014} side to move inferred from first move.)\n"),
+    }
+
+    board.start_updates()?;
+    println!("Play moves on the board; Ctrl-C to stop.\n");
+
+    let mut ply = 0u32;
+    loop {
+        match board.poll()? {
+            Some(Event::FieldUpdate { .. }) => {
+                if let Some(mv) = tracker.update(board.board()) {
+                    ply += 1;
+                    println!(
+                        "{ply:>3}. {color:<5} {uci:<6} {desc}",
+                        color = mv.color,
+                        uci = mv.uci(),
+                        desc = mv.describe()
+                    );
+                    println!("     FEN: {}\n", tracker.confirmed().fen_placement());
+                }
+            }
+            // Tolerate a board re-dump (e.g. after replug) by re-seeding.
+            Some(Event::BoardDump(b)) => {
+                tracker = MoveTracker::new(b);
+            }
+            Some(_) => {}
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     }

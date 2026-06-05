@@ -31,9 +31,11 @@ use std::time::{Duration, Instant};
 use serialport::SerialPort;
 
 pub mod board;
+pub mod game;
 pub mod protocol;
 
-pub use board::{Board, Piece, Square};
+pub use board::{Board, Color, Piece, Square};
+pub use game::{CastleSide, DetectedMove, MoveKind, MoveTracker};
 
 /// Errors produced by this crate.
 #[derive(Debug, thiserror::Error)]

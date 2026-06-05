@@ -2,6 +2,32 @@
 
 use std::fmt;
 
+/// Piece colour.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Color {
+    White,
+    Black,
+}
+
+impl Color {
+    /// The other colour.
+    pub fn opposite(self) -> Color {
+        match self {
+            Color::White => Color::Black,
+            Color::Black => Color::White,
+        }
+    }
+}
+
+impl fmt::Display for Color {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Color::White => "White",
+            Color::Black => "Black",
+        })
+    }
+}
+
 /// A chess piece as reported by the board.
 ///
 /// The DGT protocol also defines codes `0x0d..=0x0f` for the three "result"
@@ -64,6 +90,32 @@ impl Piece {
         }
     }
 
+    /// This piece's colour.
+    pub fn color(self) -> Color {
+        use Piece::*;
+        match self {
+            WhitePawn | WhiteRook | WhiteKnight | WhiteBishop | WhiteKing | WhiteQueen => {
+                Color::White
+            }
+            _ => Color::Black,
+        }
+    }
+
+    /// Whether this piece is a king.
+    pub fn is_king(self) -> bool {
+        matches!(self, Piece::WhiteKing | Piece::BlackKing)
+    }
+
+    /// Whether this piece is a pawn.
+    pub fn is_pawn(self) -> bool {
+        matches!(self, Piece::WhitePawn | Piece::BlackPawn)
+    }
+
+    /// Whether this piece is a rook.
+    pub fn is_rook(self) -> bool {
+        matches!(self, Piece::WhiteRook | Piece::BlackRook)
+    }
+
     /// A Unicode chess glyph, for pretty terminal output.
     pub fn glyph(self) -> char {
         use Piece::*;
@@ -90,6 +142,11 @@ impl Piece {
 pub struct Square(pub u8);
 
 impl Square {
+    /// Build a square from a file index (`0`=a..`7`=h) and human rank (`1`..=`8`).
+    pub const fn at(file: u8, rank: u8) -> Square {
+        Square((8 - rank) * 8 + file)
+    }
+
     /// File index, `0` = a .. `7` = h.
     pub fn file(self) -> u8 {
         self.0 % 8
@@ -98,6 +155,15 @@ impl Square {
     /// Human rank number, `1`..=`8`.
     pub fn rank(self) -> u8 {
         8 - self.0 / 8
+    }
+
+    /// Whether this square is on `color`'s promotion (back) rank: rank 8 for a
+    /// White pawn, rank 1 for a Black pawn.
+    pub fn is_promotion_rank(self, color: Color) -> bool {
+        match color {
+            Color::White => self.rank() == 8,
+            Color::Black => self.rank() == 1,
+        }
     }
 }
 
@@ -120,6 +186,39 @@ impl Board {
         Board {
             squares: [None; 64],
         }
+    }
+
+    /// The standard chess starting position.
+    pub fn startpos() -> Board {
+        use Piece::*;
+        let mut squares = [None; 64];
+        let black_back = [
+            BlackRook,
+            BlackKnight,
+            BlackBishop,
+            BlackQueen,
+            BlackKing,
+            BlackBishop,
+            BlackKnight,
+            BlackRook,
+        ];
+        let white_back = [
+            WhiteRook,
+            WhiteKnight,
+            WhiteBishop,
+            WhiteQueen,
+            WhiteKing,
+            WhiteBishop,
+            WhiteKnight,
+            WhiteRook,
+        ];
+        for i in 0..8 {
+            squares[i] = Some(black_back[i]); // rank 8
+            squares[8 + i] = Some(BlackPawn); // rank 7
+            squares[48 + i] = Some(WhitePawn); // rank 2
+            squares[56 + i] = Some(white_back[i]); // rank 1
+        }
+        Board { squares }
     }
 
     /// Build a board from a 64-byte `BOARD_DUMP` payload.

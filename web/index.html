@@ -23,7 +23,7 @@
     h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
     h1 .v { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
     .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
-    main { display: flex; gap: 24px; flex-wrap: wrap; padding: 16px 24px 32px; }
+    main { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; padding: 16px 24px 32px; }
     .col { display: flex; flex-direction: column; gap: 12px; }
     .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     button {
@@ -35,14 +35,21 @@
     label.flip { color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
 
     #board {
-      display: grid; grid-template-columns: repeat(8, 56px); grid-template-rows: repeat(8, 56px);
+      display: grid; grid-template-columns: repeat(8, var(--sq)); grid-template-rows: repeat(8, var(--sq));
+      --sq: 76px;
       border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,.4); width: max-content;
     }
-    .sq { display: flex; align-items: center; justify-content: center; font-size: 38px; line-height: 1; position: relative; }
+    .sq { display: flex; align-items: center; justify-content: center; line-height: 1; position: relative; }
     .sq.light { background: var(--light); }
     .sq.dark { background: var(--dark); }
-    .sq .piece { filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
-    .sq .coord { position: absolute; bottom: 2px; right: 4px; font-size: 9px; color: rgba(0,0,0,.35); }
+    /* Both colours use the solid glyph; CSS gives white pieces a light fill with
+       a dark outline and black pieces a dark fill — crisp on either square. */
+    .sq .piece { font-size: calc(var(--sq) * 0.78); }
+    .sq .piece.white { color: #fafafa; -webkit-text-stroke: 2px #2b2b2b; text-shadow: 0 2px 3px rgba(0,0,0,.35); }
+    .sq .piece.black { color: #2b2b2b; -webkit-text-stroke: 2px #111; text-shadow: 0 2px 3px rgba(0,0,0,.25); }
+    .sq .coord { position: absolute; bottom: 2px; right: 4px; font-size: 10px; font-weight: 600; color: rgba(0,0,0,.4); }
+
+    @media (max-width: 720px) { #board { --sq: 40px; } }
 
     .panel { background: var(--panel); border: 1px solid #232c44; border-radius: 10px; padding: 14px 16px; min-width: 280px; }
     .panel h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }

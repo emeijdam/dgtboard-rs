@@ -5,11 +5,16 @@
 
 import init, { DgtSession, initSequence, version } from "./pkg/dgtboard_wasm.js";
 
-const PIECES = {
-  K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
-  k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
-};
+// Solid glyphs for both colours (hollow "white" glyphs are invisible on light
+// squares); colour is applied via a CSS class instead.
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+function pieceFor(ch) {
+  if (!ch) return ["", ""];
+  const lower = ch.toLowerCase();
+  return [GLYPH[lower] || "", ch === lower ? "black" : "white"];
+}
 
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 const $ = (id) => document.getElementById(id);
 let port, reader, writer, session, keepReading = false, ply = 0;
 
@@ -17,12 +22,30 @@ async function main() {
   await init();
   $("version").textContent = "core v" + version();
   buildEmptyBoard();
+  renderBoard(START_FEN); // preview position until a board is connected
   if (!("serial" in navigator)) {
     setStatus("Web Serial isn't available in this browser — use Chrome, Edge, or Opera.", true);
     $("connect").disabled = true;
   }
   $("connect").addEventListener("click", connect);
   $("disconnect").addEventListener("click", disconnect);
+  $("flip").addEventListener("change", onFlipToggle);
+}
+
+// Flipping live: rebuild the session in the new orientation and re-request a
+// full board dump so the position re-seeds immediately. When disconnected, the
+// new setting just applies on the next connect.
+async function onFlipToggle() {
+  if (!keepReading || !writer) return;
+  session = new DgtSession($("flip").checked);
+  ply = 0;
+  $("moves").innerHTML = "";
+  buildEmptyBoard();
+  try {
+    await writer.write(initSequence());
+  } catch (e) {
+    setStatus("Flip failed: " + e.message, true);
+  }
 }
 
 async function connect() {
@@ -102,15 +125,19 @@ function renderBoard(fen) {
       if (ch >= "1" && ch <= "8") {
         for (let k = 0; k < +ch; k++) setPiece(cells[i++], "");
       } else {
-        setPiece(cells[i++], PIECES[ch] || "");
+        setPiece(cells[i++], ch);
       }
     }
   }
 }
 
-function setPiece(cell, glyph) {
+function setPiece(cell, ch) {
   const span = cell.querySelector(".piece");
-  if (span.textContent !== glyph) span.textContent = glyph;
+  if (span.dataset.ch === ch) return;
+  const [glyph, color] = pieceFor(ch);
+  span.textContent = glyph;
+  span.className = "piece " + color;
+  span.dataset.ch = ch;
 }
 
 function buildEmptyBoard() {
@@ -148,7 +175,7 @@ function addMove(color, uci, desc) {
 function setConnected(on) {
   $("connect").disabled = on;
   $("disconnect").disabled = !on;
-  $("flip").disabled = on;
+  // flip stays enabled so you can re-orient the board live
 }
 
 function setStatus(text, isError = false) {

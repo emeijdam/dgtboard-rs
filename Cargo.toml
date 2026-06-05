@@ -1,0 +1,22 @@
+[package]
+name = "dgtboard"
+version = "0.1.0"
+edition = "2021"
+description = "Read a DGT electronic chess board over USB / serial"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "dgtboard"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dgt"
+path = "src/main.rs"
+
+[dependencies]
+serialport = "4"
+thiserror = "1"
+
+# Binary-only deps; kept light so the library stays dependency-lean.
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

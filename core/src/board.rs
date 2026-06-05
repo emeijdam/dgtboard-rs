@@ -180,6 +180,13 @@ pub struct Board {
     pub squares: [Option<Piece>; 64],
 }
 
+impl Default for Board {
+    /// An empty board.
+    fn default() -> Board {
+        Board::empty()
+    }
+}
+
 impl Board {
     /// An empty board.
     pub fn empty() -> Board {

@@ -1,0 +1,22 @@
+{
+  "name": "dgtboard-wasm",
+  "type": "module",
+  "description": "WebAssembly bindings for dgtboard-core: decode a DGT board's byte stream in the browser (pair with the Web Serial API)",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emeijdam/dgtboard-rs"
+  },
+  "files": [
+    "dgtboard_wasm_bg.wasm",
+    "dgtboard_wasm.js",
+    "dgtboard_wasm.d.ts"
+  ],
+  "main": "dgtboard_wasm.js",
+  "homepage": "https://github.com/emeijdam/dgtboard-rs",
+  "types": "dgtboard_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

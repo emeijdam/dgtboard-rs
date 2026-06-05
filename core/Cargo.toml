@@ -1,0 +1,18 @@
+[package]
+name = "dgtboard-core"
+description = "DGT electronic chess board protocol: byte framing, board state, and move detection (no I/O — runs anywhere, incl. WebAssembly)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["dgt", "chess", "chessboard", "protocol", "wasm"]
+categories = ["parsing", "game-development"]
+
+[lib]
+name = "dgtboard_core"
+
+# Intentionally dependency-free: the core is pure logic so it compiles cleanly
+# to wasm32 (and stays tiny).
+[dependencies]

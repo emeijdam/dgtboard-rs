@@ -1,27 +1,18 @@
-[package]
-name = "dgtboard"
+[workspace]
+resolver = "2"
+members = ["core", "native", "wasm"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Read a DGT electronic chess board over USB / serial, with move detection"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/emeijdam/dgtboard-rs"
 homepage = "https://github.com/emeijdam/dgtboard-rs"
-readme = "README.md"
-keywords = ["dgt", "chess", "chessboard", "serial", "usb"]
-categories = ["hardware-support", "command-line-utilities"]
 
-[lib]
-name = "dgtboard"
-path = "src/lib.rs"
-
-[[bin]]
-name = "dgt"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+dgtboard-core = { path = "core", version = "0.1.0" }
 serialport = "4"
 thiserror = "1"
-
-# Binary-only deps; kept light so the library stays dependency-lean.
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+wasm-bindgen = "0.2"

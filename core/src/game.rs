@@ -12,23 +12,34 @@
 //! move happened. It does not validate legality, detect check/mate, or generate
 //! SAN.
 //!
-//! ```no_run
-//! use dgtboard::{DgtBoard, Event, MoveTracker};
-//! use std::time::Duration;
+//! Feed it the running board after each field update (from a [`Decoder`], a
+//! native `DgtBoard`, or a browser Web Serial reader):
 //!
-//! let mut board = DgtBoard::open("/dev/cu.usbserial-XXXX")?;
-//! let start = board.snapshot(Duration::from_secs(2))?;
-//! let mut tracker = MoveTracker::new(start);
-//! board.start_updates()?;
-//! loop {
-//!     if let Some(Event::FieldUpdate { .. }) = board.poll()? {
-//!         if let Some(mv) = tracker.update(board.board()) {
-//!             println!("{}  {}", mv.uci(), mv.describe());
+//! ```
+//! use dgtboard_core::{Decoder, Event, MoveTracker};
+//!
+//! let mut decoder = Decoder::new();
+//! let mut tracker: Option<MoveTracker> = None;
+//!
+//! // `bytes` are whatever the board sent over the wire.
+//! # let bytes: Vec<u8> = vec![];
+//! decoder.push(&bytes);
+//! while let Some(event) = decoder.poll() {
+//!     match event {
+//!         Event::BoardDump(board) => tracker = Some(MoveTracker::new(board)),
+//!         Event::FieldUpdate { .. } => {
+//!             if let Some(t) = tracker.as_mut() {
+//!                 if let Some(mv) = t.update(decoder.board()) {
+//!                     println!("{}  {}", mv.uci(), mv.describe());
+//!                 }
+//!             }
 //!         }
+//!         _ => {}
 //!     }
 //! }
-//! # Ok::<(), dgtboard::Error>(())
 //! ```
+//!
+//! [`Decoder`]: crate::Decoder
 
 use crate::board::{Board, Color, Piece, Square};
 

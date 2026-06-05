@@ -1,0 +1,26 @@
+[package]
+name = "dgtboard"
+description = "Read a DGT electronic chess board over USB / serial, with move detection and a connection doctor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../README.md"
+keywords = ["dgt", "chess", "chessboard", "serial", "usb"]
+categories = ["hardware-support", "command-line-utilities"]
+
+[lib]
+name = "dgtboard"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dgt"
+path = "src/main.rs"
+
+[dependencies]
+dgtboard-core = { workspace = true }
+serialport = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

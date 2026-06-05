@@ -1,0 +1,16 @@
+[package]
+name = "dgtboard-wasm"
+description = "WebAssembly bindings for dgtboard-core: decode a DGT board's byte stream in the browser (pair with the Web Serial API)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dgtboard-core = { workspace = true }
+wasm-bindgen = { workspace = true }

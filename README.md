@@ -69,9 +69,37 @@ first** (the usual touch-move order).
 The board only knows piece placement, so `fen_placement()` returns just the
 first FEN field (no side-to-move / castling / counters).
 
+## First time connecting? Run the doctor
+
+DGT boards use an FTDI USB-serial chip with DGT's **custom** USB vendor id, so
+macOS's built-in FTDI support doesn't bind to it. You have to install the FTDI
+VCP driver and then *approve* it in System Settings — two easily-missed steps.
+`dgt doctor` checks the whole chain and tells you exactly where you're stuck:
+
+```sh
+cargo run -- doctor
+cargo run -- doctor --open-settings   # also jump to the driver-approval screen
+```
+
+```
+[1/4] USB device   ✓  Board detected: DGT e-Board (VID 045b PID 8111)
+[2/4] Serial port  ✓  /dev/cu.usbmodem01
+[3/4] Driver       ✓  com.ftdi.vcp.dext [activated enabled]
+[4/4] Security     ✓  Driver approved.
+--------------------------------------------------
+✓ Ready. The board is connected. Try:  dgt snapshot
+```
+
+If a step fails it points you at the fix: a data-capable cable, the FTDI VCP
+driver download (<https://ftdichip.com/drivers/vcp-drivers/>), or the macOS
+driver-approval screen (System Settings → General → Login Items & Extensions →
+Driver Extensions on macOS 15+, or Privacy & Security on macOS 13–14). After
+approving a driver, unplug and replug the board.
+
 ## CLI
 
 ```sh
+cargo run -- doctor                   # diagnose connection / driver / security
 cargo run -- list                     # show serial ports
 cargo run -- snapshot                 # read the position once
 cargo run -- snapshot --port /dev/cu.usbserial-XXXX

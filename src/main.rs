@@ -7,6 +7,8 @@ use clap::{Parser, Subcommand};
 use dgtboard::{Board, DgtBoard, Event, MoveTracker};
 use serialport::SerialPortType;
 
+mod doctor;
+
 #[derive(Parser)]
 #[command(name = "dgt", about = "Recognise and read a DGT chess board over USB / serial")]
 struct Cli {
@@ -16,6 +18,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Diagnose connection problems: USB device, serial port, driver, security.
+    Doctor {
+        /// Open System Settings at the driver-approval screen.
+        #[arg(long)]
+        open_settings: bool,
+    },
     /// List available serial ports (and flag likely DGT/USB boards).
     List,
     /// Connect, read the position once, print board + FEN, exit.
@@ -49,6 +57,10 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Doctor { open_settings } => {
+            doctor::run_doctor(open_settings);
+            Ok(())
+        }
         Command::List => list_ports(),
         Command::Snapshot { port, flip } => snapshot(port, flip),
         Command::Watch { port, flip } => watch(port, flip),
@@ -121,7 +133,7 @@ fn pick_port(explicit: Option<String>) -> Result<String> {
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
     match candidates.as_slice() {
-        [] => bail!("no USB serial ports found; connect the board or pass --port (see `dgt list`)"),
+        [] => bail!("no USB serial ports found. Run `dgt doctor` to diagnose the connection (driver / security), or pass --port."),
         [(score, best), rest @ ..] => {
             // Ambiguous only if a different *device* scores equally well; the
             // cu/tty pair for one device is disambiguated by the cu.* bonus.

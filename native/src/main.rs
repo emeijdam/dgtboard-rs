@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use dgtboard::{Board, DgtBoard, Event, MoveTracker};
+use dgtboard::{Board, DgtBoard, Event, MoveTracker, RefereedGame, Ruling, Status};
 use serialport::SerialPortType;
 
 mod doctor;
@@ -53,6 +53,16 @@ enum Command {
         #[arg(short, long)]
         flip: bool,
     },
+    /// Referee a game from the start position: validate moves, flag illegal ones,
+    /// and announce check / checkmate / stalemate.
+    Referee {
+        /// Serial port path. Auto-detected if omitted.
+        #[arg(short, long)]
+        port: Option<String>,
+        /// Read the board rotated 180° (White at the end away from the cable).
+        #[arg(short, long)]
+        flip: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -65,6 +75,7 @@ fn main() -> Result<()> {
         Command::Snapshot { port, flip } => snapshot(port, flip),
         Command::Watch { port, flip } => watch(port, flip),
         Command::Moves { port, flip } => moves(port, flip),
+        Command::Referee { port, flip } => referee(port, flip),
     }
 }
 
@@ -246,6 +257,64 @@ fn moves(port: Option<String>, flip: bool) -> Result<()> {
             Some(Event::BoardDump(b)) => {
                 tracker = MoveTracker::new(b);
             }
+            Some(_) => {}
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+fn announce(status: Status) {
+    match status {
+        Status::Normal => {}
+        Status::Check => println!("     + check"),
+        Status::Checkmate { winner } => {
+            println!("\n     ███  CHECKMATE — {winner} wins  ███\n");
+        }
+        Status::Stalemate => println!("\n     ▒▒▒  STALEMATE — draw  ▒▒▒\n"),
+        Status::DrawInsufficientMaterial => {
+            println!("\n     ▒▒▒  DRAW — insufficient material  ▒▒▒\n");
+        }
+    }
+}
+
+fn referee(port: Option<String>, flip: bool) -> Result<()> {
+    let path = pick_port(port)?;
+    let mut board = DgtBoard::open(&path)
+        .with_context(|| format!("opening {path}"))?
+        .flipped(flip);
+
+    let start = board
+        .snapshot(Duration::from_secs(3))
+        .context("reading initial board (is the board powered and connected?)")?;
+    println!("Starting position:");
+    print_board(&start);
+    if start != Board::startpos() {
+        println!(
+            "⚠ Board isn't in the standard starting position — referee mode expects a fresh game."
+        );
+        println!("  Set the pieces up and restart, or use `dgt moves` for free play.\n");
+    }
+
+    let mut game = RefereedGame::new();
+    board.start_updates()?;
+    println!("Refereeing — play a game. Illegal moves are flagged; Ctrl-C to stop.\n");
+
+    let mut ply = 0u32;
+    loop {
+        match board.poll()? {
+            Some(Event::FieldUpdate { .. }) => match game.update(board.board()) {
+                Some(Ruling::Legal { san, status, .. }) => {
+                    ply += 1;
+                    let mover = if ply % 2 == 1 { "White" } else { "Black" };
+                    println!("{ply:>3}. {mover:<5} {san}");
+                    announce(status);
+                }
+                Some(Ruling::Illegal { uci }) => {
+                    println!("  ⚠ ILLEGAL: {uci} is not legal here. Put the piece back to continue.");
+                }
+                Some(Ruling::BackInSync) => println!("  ✓ Back in sync.\n"),
+                None => {}
+            },
             Some(_) => {}
             None => std::thread::sleep(Duration::from_millis(20)),
         }

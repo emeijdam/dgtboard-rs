@@ -48,8 +48,16 @@
     .sq .piece.white { color: #fafafa; -webkit-text-stroke: 2px #2b2b2b; text-shadow: 0 2px 3px rgba(0,0,0,.35); }
     .sq .piece.black { color: #2b2b2b; -webkit-text-stroke: 2px #111; text-shadow: 0 2px 3px rgba(0,0,0,.25); }
     .sq .coord { position: absolute; bottom: 2px; right: 4px; font-size: 10px; font-weight: 600; color: rgba(0,0,0,.4); }
+    .sq.check { box-shadow: inset 0 0 0 4px #e5484d, inset 0 0 22px rgba(229,72,77,.75); }
 
     @media (max-width: 720px) { #board { --sq: 40px; } }
+
+    .banner { margin-top: 2px; min-height: 0; }
+    .banner.show { padding: 12px 16px; border-radius: 10px; font-weight: 800; font-size: 16px; letter-spacing: .3px; }
+    .banner.win { background: linear-gradient(90deg, #ffd76e, #f5a623); color: #3a2c00; box-shadow: 0 6px 24px rgba(245,166,35,.35); }
+    .banner.draw { background: #2a2f42; color: #cdd3e6; }
+    .banner.illegal { background: #3a1416; color: #ff9a9a; border: 1px solid #e5484d; animation: shake .25s; }
+    @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 
     .panel { background: var(--panel); border: 1px solid #232c44; border-radius: 10px; padding: 14px 16px; min-width: 280px; }
     .panel h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
@@ -62,6 +70,7 @@
     #moves li:nth-child(odd) { background: rgba(255,255,255,.03); }
     #moves .n { color: var(--muted); width: 28px; text-align: right; }
     #moves .uci { color: var(--accent); width: 56px; }
+    #moves .san { color: var(--ink); font-weight: 600; }
     .note { color: var(--muted); font-size: 12px; line-height: 1.5; }
     a { color: var(--accent); }
   </style>
@@ -69,7 +78,7 @@
 <body>
   <header>
     <h1>dgtboard <span class="v" id="version"></span></h1>
-    <div class="sub">A DGT chess board, decoded live in your browser — Rust core compiled to WebAssembly, talking to the board over the Web Serial API. No app, no server.</div>
+    <div class="sub">A DGT chess board, decoded live in your browser — Rust core compiled to WebAssembly, talking to the board over the Web Serial API. It referees the game too: legal-move checking, illegal-move alerts, and check / checkmate detection. No app, no server.</div>
   </header>
   <main>
     <div class="col">
@@ -79,6 +88,7 @@
         <label class="flip"><input type="checkbox" id="flip" checked /> Flip 180°</label>
       </div>
       <div id="board"></div>
+      <div id="banner" class="banner"></div>
       <div id="status">Click “Connect board”, then pick the DGT serial port.</div>
     </div>
 
@@ -98,7 +108,9 @@
           Works in Chromium browsers (Chrome / Edge / Opera) — Web Serial isn't in
           Safari or Firefox. The board still needs its USB serial driver installed
           and approved at the OS level (run <code>dgt doctor</code> if unsure).
-          Toggle “Flip 180°” if White shows on the wrong side.
+          Toggle “Flip 180°” if White shows on the wrong side. Refereeing assumes
+          the game starts from the standard position; an illegal move is flagged
+          until you put the piece back.
         </div>
       </div>
     </div>

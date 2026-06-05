@@ -19,7 +19,7 @@ name = "dgt"
 path = "src/main.rs"
 
 [dependencies]
-dgtboard-core = { workspace = true }
+dgtboard-core = { workspace = true, features = ["rules"] }
 serialport = { workspace = true }
 thiserror = { workspace = true }
 clap = { workspace = true }

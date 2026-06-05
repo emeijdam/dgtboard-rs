@@ -31,8 +31,8 @@ use serialport::SerialPort;
 
 // Re-export the whole core API so downstream code only needs `dgtboard`.
 pub use dgtboard_core::{
-    board, decoder, game, protocol, Board, CastleSide, Color, Decoder, DetectedMove, Event,
-    MoveKind, MoveTracker, Piece, Square,
+    board, decoder, game, protocol, rules, Board, CastleSide, Color, Decoder, DetectedMove, Event,
+    MoveKind, MoveTracker, Piece, RefereedGame, Ruling, Square, Status,
 };
 
 /// Errors produced by the native transport.

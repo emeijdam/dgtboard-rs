@@ -2,44 +2,48 @@
 /* eslint-disable */
 
 /**
- * A live decoding session: a [`Decoder`] plus a [`MoveTracker`] seeded from the
- * first board dump.
+ * A live decoding + refereeing session.
  */
 export class DgtSession {
     free(): void;
     [Symbol.dispose](): void;
     /**
-     * The current position as an ASCII diagram.
+     * The square of the king in check, in DGT index order (0 = a8), or `-1`.
      */
-    ascii(): string;
+    checkedSquare(): number;
     /**
      * The current position as a FEN placement string.
      */
     fen(): string;
     /**
      * Create a session. Pass `flip = true` if White sits at the end of the
-     * board away from the cable.
+     * board away from the cable. Refereeing assumes the game starts from the
+     * standard initial position.
      */
     constructor(flip: boolean);
     /**
-     * Feed raw bytes received from the board. Drains every complete message,
-     * updating the board state and recording any detected moves.
+     * Feed raw bytes from the board. Drains every complete message, updates the
+     * board, referees each move, and records events.
      */
     push(bytes: Uint8Array): void;
     /**
-     * Whose turn it is (`"White"`, `"Black"`, or `""` if unknown).
+     * The current game status as a word: `normal`, `check`, `checkmate:White`,
+     * `checkmate:Black`, `stalemate`, or `draw`.
      */
-    sideToMove(): string;
+    status(): string;
     /**
-     * Drain moves detected since the last call. Returns a newline-separated
-     * list; each line is `color\tuci\tdescription`.
+     * Drain events recorded since the last call, newline-separated. Each line
+     * is one of:
+     * - `move\t<ply>\t<color>\t<san>\t<status>`
+     * - `illegal\t<uci>`
+     * - `sync`
      */
-    takeMoves(): string;
+    takeEvents(): string;
 }
 
 /**
- * The bytes to send to the board to begin: reset to idle, request a full
- * dump (seeds the position), then enter update mode (streams field changes).
+ * The bytes to send to the board to begin: reset to idle, request a full dump
+ * (seeds the position), then enter update mode (streams field changes).
  */
 export function initSequence(): Uint8Array;
 
@@ -53,12 +57,12 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_dgtsession_free: (a: number, b: number) => void;
-    readonly dgtsession_ascii: (a: number) => [number, number];
+    readonly dgtsession_checkedSquare: (a: number) => number;
     readonly dgtsession_fen: (a: number) => [number, number];
     readonly dgtsession_new: (a: number) => number;
     readonly dgtsession_push: (a: number, b: number, c: number) => void;
-    readonly dgtsession_sideToMove: (a: number) => [number, number];
-    readonly dgtsession_takeMoves: (a: number) => [number, number];
+    readonly dgtsession_status: (a: number) => [number, number];
+    readonly dgtsession_takeEvents: (a: number) => [number, number];
     readonly initSequence: () => [number, number];
     readonly version: () => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;

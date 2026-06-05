@@ -29,10 +29,14 @@ pub mod board;
 pub mod decoder;
 pub mod game;
 pub mod protocol;
+#[cfg(feature = "rules")]
+pub mod rules;
 
 pub use board::{Board, Color, Piece, Square};
 pub use decoder::{Decoder, Event};
 pub use game::{CastleSide, DetectedMove, MoveKind, MoveTracker};
+#[cfg(feature = "rules")]
+pub use rules::{RefereedGame, Ruling, Status};
 
 /// Errors produced while decoding the protocol.
 #[derive(Debug, Clone, PartialEq, Eq)]

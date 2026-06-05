@@ -1,8 +1,7 @@
 /* @ts-self-types="./dgtboard_wasm.d.ts" */
 
 /**
- * A live decoding session: a [`Decoder`] plus a [`MoveTracker`] seeded from the
- * first board dump.
+ * A live decoding + refereeing session.
  */
 export class DgtSession {
     __destroy_into_raw() {
@@ -16,20 +15,12 @@ export class DgtSession {
         wasm.__wbg_dgtsession_free(ptr, 0);
     }
     /**
-     * The current position as an ASCII diagram.
-     * @returns {string}
+     * The square of the king in check, in DGT index order (0 = a8), or `-1`.
+     * @returns {number}
      */
-    ascii() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.dgtsession_ascii(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
+    checkedSquare() {
+        const ret = wasm.dgtsession_checkedSquare(this.__wbg_ptr);
+        return ret;
     }
     /**
      * The current position as a FEN placement string.
@@ -49,7 +40,8 @@ export class DgtSession {
     }
     /**
      * Create a session. Pass `flip = true` if White sits at the end of the
-     * board away from the cable.
+     * board away from the cable. Refereeing assumes the game starts from the
+     * standard initial position.
      * @param {boolean} flip
      */
     constructor(flip) {
@@ -59,8 +51,8 @@ export class DgtSession {
         return this;
     }
     /**
-     * Feed raw bytes received from the board. Drains every complete message,
-     * updating the board state and recording any detected moves.
+     * Feed raw bytes from the board. Drains every complete message, updates the
+     * board, referees each move, and records events.
      * @param {Uint8Array} bytes
      */
     push(bytes) {
@@ -69,14 +61,15 @@ export class DgtSession {
         wasm.dgtsession_push(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * Whose turn it is (`"White"`, `"Black"`, or `""` if unknown).
+     * The current game status as a word: `normal`, `check`, `checkmate:White`,
+     * `checkmate:Black`, `stalemate`, or `draw`.
      * @returns {string}
      */
-    sideToMove() {
+    status() {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.dgtsession_sideToMove(this.__wbg_ptr);
+            const ret = wasm.dgtsession_status(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -85,15 +78,18 @@ export class DgtSession {
         }
     }
     /**
-     * Drain moves detected since the last call. Returns a newline-separated
-     * list; each line is `color\tuci\tdescription`.
+     * Drain events recorded since the last call, newline-separated. Each line
+     * is one of:
+     * - `move\t<ply>\t<color>\t<san>\t<status>`
+     * - `illegal\t<uci>`
+     * - `sync`
      * @returns {string}
      */
-    takeMoves() {
+    takeEvents() {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.dgtsession_takeMoves(this.__wbg_ptr);
+            const ret = wasm.dgtsession_takeEvents(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -105,8 +101,8 @@ export class DgtSession {
 if (Symbol.dispose) DgtSession.prototype[Symbol.dispose] = DgtSession.prototype.free;
 
 /**
- * The bytes to send to the board to begin: reset to idle, request a full
- * dump (seeds the position), then enter update mode (streams field changes).
+ * The bytes to send to the board to begin: reset to idle, request a full dump
+ * (seeds the position), then enter update mode (streams field changes).
  * @returns {Uint8Array}
  */
 export function initSequence() {

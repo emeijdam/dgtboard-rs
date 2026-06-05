@@ -1,7 +1,9 @@
 // Web Serial + WebAssembly demo: read a live DGT board in the browser.
 //
-// The Rust core (compiled to wasm) does all the protocol work; this file only
-// moves bytes between the serial port and the wasm `DgtSession`, and renders.
+// The Rust core (compiled to wasm) does all the protocol work AND referees the
+// game (legal-move checking, illegal-move alerts, check/checkmate — see
+// wasm/src/lib.rs). This file only moves bytes between the serial port and the
+// wasm `DgtSession`, and renders.
 
 import init, { DgtSession, initSequence, version } from "./pkg/dgtboard_wasm.js";
 
@@ -15,8 +17,10 @@ function pieceFor(ch) {
 }
 
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+const TAB = "\t";
+const NL = "\n";
 const $ = (id) => document.getElementById(id);
-let port, reader, writer, session, keepReading = false, ply = 0;
+let port, reader, writer, session, keepReading = false, gameOver = false;
 
 async function main() {
   await init();
@@ -38,8 +42,7 @@ async function main() {
 async function onFlipToggle() {
   if (!keepReading || !writer) return;
   session = new DgtSession($("flip").checked);
-  ply = 0;
-  $("moves").innerHTML = "";
+  resetGame();
   buildEmptyBoard();
   try {
     await writer.write(initSequence());
@@ -58,8 +61,7 @@ async function connect() {
   }
 
   session = new DgtSession($("flip").checked);
-  ply = 0;
-  $("moves").innerHTML = "";
+  resetGame();
 
   writer = port.writable.getWriter();
   reader = port.readable.getReader();
@@ -68,7 +70,7 @@ async function connect() {
   await writer.write(initSequence());
 
   setConnected(true);
-  setStatus("Connected. Move pieces on the board.");
+  setStatus("Connected. Play a game on the board.");
   keepReading = true;
   readLoop();
 }
@@ -103,17 +105,24 @@ function render() {
   const fen = session.fen();
   renderBoard(fen);
   $("fen").textContent = fen;
-  const side = session.sideToMove();
-  $("turn").textContent = side ? side + " to move" : " ";
+  highlightCheck(session.checkedSquare());
 
-  const moves = session.takeMoves();
-  if (moves) {
-    for (const line of moves.split("\n")) {
+  const events = session.takeEvents();
+  if (events) {
+    for (const line of events.split(NL)) {
       if (!line) continue;
-      const [color, uci, desc] = line.split("\t");
-      addMove(color, uci, desc);
+      const parts = line.split(TAB);
+      if (parts[0] === "move") {
+        addMove(parts[1], parts[2], parts[3]); // ply, colour, SAN
+        if (!gameOver) clearBanner();
+      } else if (parts[0] === "illegal" && !gameOver) {
+        showIllegal(parts[1]);
+      } else if (parts[0] === "sync") {
+        clearBanner();
+      }
     }
   }
+  updateStatus(session.status());
 }
 
 function renderBoard(fen) {
@@ -162,14 +171,67 @@ function buildEmptyBoard() {
   }
 }
 
-function addMove(color, uci, desc) {
-  ply++;
+function addMove(ply, color, san) {
+  const num = Math.ceil(ply / 2);
+  const marker = color === "White" ? `${num}.` : `${num}…`;
   const li = document.createElement("li");
-  li.innerHTML =
-    `<span class="n">${ply}.</span><span class="uci">${uci}</span><span class="desc">${color} ${desc}</span>`;
+  li.innerHTML = `<span class="n">${marker}</span><span class="san">${san}</span>`;
   const list = $("moves");
   list.appendChild(li);
   list.scrollTop = list.scrollHeight;
+}
+
+function highlightCheck(idx) {
+  const cells = $("board").children;
+  for (const c of cells) c.classList.remove("check");
+  if (idx >= 0 && cells[idx]) cells[idx].classList.add("check");
+}
+
+function banner(text, type) {
+  const el = $("banner");
+  el.textContent = text;
+  el.className = "banner show " + type;
+}
+
+function clearBanner() {
+  const el = $("banner");
+  // Keep a game-over banner sticky; only clear transient (illegal) ones.
+  if (el.classList.contains("win") || el.classList.contains("draw")) return;
+  el.className = "banner";
+  el.textContent = "";
+}
+
+function showIllegal(uci) {
+  banner(`Illegal move: ${uci} — put the piece back`, "illegal");
+}
+
+function updateStatus(word) {
+  const turn = $("turn");
+  if (word.startsWith("checkmate:")) {
+    gameOver = true;
+    banner(`♚ Checkmate — ${word.split(":")[1]} wins`, "win");
+    turn.textContent = "Checkmate";
+  } else if (word === "stalemate") {
+    gameOver = true;
+    banner("½–½ Stalemate — draw", "draw");
+    turn.textContent = "Stalemate";
+  } else if (word === "draw") {
+    gameOver = true;
+    banner("½–½ Draw — insufficient material", "draw");
+    turn.textContent = "Draw";
+  } else if (word === "check") {
+    turn.textContent = "Check!";
+  } else {
+    turn.textContent = "";
+  }
+}
+
+function resetGame() {
+  gameOver = false;
+  $("moves").innerHTML = "";
+  $("banner").className = "banner";
+  $("banner").textContent = "";
+  highlightCheck(-1);
 }
 
 function setConnected(on) {

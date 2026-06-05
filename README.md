@@ -14,7 +14,7 @@ or in a browser:
 
 | Crate / dir       | What it is                                                            |
 | ----------------- | --------------------------------------------------------------------- |
-| **`core/`** `dgtboard-core` | Pure protocol: byte framing (`Decoder`), board/FEN, move detection. No dependencies, no I/O — compiles to wasm. |
+| **`core/`** `dgtboard-core` | Pure protocol: byte framing (`Decoder`), board/FEN, move detection, and (optional `rules` feature) rules-aware refereeing via `shakmaty`. No required deps, no I/O — compiles to wasm. |
 | **`native/`** `dgtboard`    | Serial transport (`DgtBoard`), the `dgt` CLI, and the connection `doctor`. Re-exports the core. |
 | **`wasm/`** `dgtboard-wasm` | `wasm-bindgen` bindings over the core. |
 | **`web/`**        | A zero-install browser demo: live board over Web Serial. |
@@ -26,8 +26,10 @@ serial port / Web Serial  ──bytes──▶  Decoder ──Event──▶  Mo
 
 ## Browser demo (WASM + Web Serial)
 
-Read your physical board live in a Chromium browser — no app, no server, ~32 KB
-of wasm:
+Read your physical board live in a Chromium browser — no app, no server, ~0.7 MB
+of wasm (it bundles a full chess-rules engine). The page **referees** the game:
+illegal moves are flagged, the king in check is highlighted, and checkmate /
+stalemate are bannered.
 
 ```sh
 ./web/build.sh                 # builds web/pkg via wasm-pack
@@ -101,6 +103,39 @@ first** (the usual touch-move order).
 The board only knows piece placement, so `fen_placement()` returns just the
 first FEN field (no side-to-move / castling / counters).
 
+### Rules & refereeing
+
+The `rules` feature (on in the CLI and web demo) adds `RefereedGame`, which
+validates each detected move against the real laws of chess using
+[`shakmaty`](https://crates.io/crates/shakmaty) — so it catches **illegal
+moves** and reports **check / checkmate / stalemate / draw** with SAN like
+`Qh4#`:
+
+```rust
+use dgtboard::{DgtBoard, Event, RefereedGame, Ruling};
+use std::time::Duration;
+
+let mut board = DgtBoard::open("/dev/cu.usbserial-XXXX")?;
+board.snapshot(Duration::from_secs(2))?;   // referee expects the start position
+let mut game = RefereedGame::new();
+board.start_updates()?;
+loop {
+    if let Some(Event::FieldUpdate { .. }) = board.poll()? {
+        match game.update(board.board()) {
+            Some(Ruling::Legal { san, status, .. }) => println!("{san}  {status:?}"),
+            Some(Ruling::Illegal { uci })           => println!("illegal: {uci}"),
+            Some(Ruling::BackInSync)                => println!("back in sync"),
+            None => {}
+        }
+    }
+}
+```
+
+When an illegal move is played the board is marked *out of sync*; it re-syncs
+(`Ruling::BackInSync`) once you restore a legal position. `RefereedGame` also
+exposes `checked_square()` for highlighting the king in check. The `dgt referee`
+command and the browser demo are both thin wrappers over this.
+
 ## First time connecting? Run the doctor
 
 DGT boards use an FTDI USB-serial chip with DGT's **custom** USB vendor id, so
@@ -137,6 +172,7 @@ cargo run --bin dgt -- snapshot                 # read the position once
 cargo run --bin dgt -- snapshot --port /dev/cu.usbserial-XXXX
 cargo run --bin dgt -- watch                    # live: print raw per-square changes
 cargo run --bin dgt -- moves                    # live: print detected chess moves (UCI + description)
+cargo run --bin dgt -- referee                  # live: validate moves, flag illegal, announce check / mate
 ```
 
 `snapshot` and `watch` auto-select the port when exactly one USB serial device

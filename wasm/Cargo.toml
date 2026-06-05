@@ -12,5 +12,5 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dgtboard-core = { workspace = true }
+dgtboard-core = { workspace = true, features = ["rules"] }
 wasm-bindgen = { workspace = true }

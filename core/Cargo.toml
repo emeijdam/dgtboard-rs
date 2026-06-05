@@ -13,6 +13,12 @@ categories = ["parsing", "game-development"]
 [lib]
 name = "dgtboard_core"
 
-# Intentionally dependency-free: the core is pure logic so it compiles cleanly
-# to wasm32 (and stays tiny).
+[features]
+default = []
+# Legality validation + check/checkmate/stalemate detection, via shakmaty.
+rules = ["dep:shakmaty"]
+
+# The base crate is intentionally dependency-free: pure logic that compiles
+# cleanly to wasm32 and stays tiny. `rules` is the one optional exception.
 [dependencies]
+shakmaty = { version = "0.30", optional = true }

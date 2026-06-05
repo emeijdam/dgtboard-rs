@@ -20,7 +20,7 @@ const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 const TAB = "\t";
 const NL = "\n";
 const $ = (id) => document.getElementById(id);
-let port, reader, writer, session, keepReading = false, gameOver = false;
+let port, reader, writer, session, keepReading = false, gameOver = false, startChecked = false;
 
 async function main() {
   await init();
@@ -106,6 +106,17 @@ function render() {
   renderBoard(fen);
   $("fen").textContent = fen;
   highlightCheck(session.checkedSquare());
+
+  // Once the first real position arrives, check it's the start position — if
+  // not (usually a wrong Flip), the referee can't begin, so say so loudly.
+  if (!startChecked && fen !== "8/8/8/8/8/8/8/8") {
+    startChecked = true;
+    if (session.isStartPosition()) {
+      setStatus("Referee ready — play a game.");
+    } else {
+      setStatus("⚠ Referee needs the standard start position — toggle “Flip 180°”, or set the pieces up and reconnect.", true);
+    }
+  }
 
   const events = session.takeEvents();
   if (events) {
@@ -210,27 +221,42 @@ function updateStatus(word) {
   if (word.startsWith("checkmate:")) {
     gameOver = true;
     banner(`♚ Checkmate — ${word.split(":")[1]} wins`, "win");
+    turn.className = "";
     turn.textContent = "Checkmate";
-  } else if (word === "stalemate") {
+    return;
+  }
+  if (word === "stalemate") {
     gameOver = true;
     banner("½–½ Stalemate — draw", "draw");
+    turn.className = "";
     turn.textContent = "Stalemate";
-  } else if (word === "draw") {
+    return;
+  }
+  if (word === "draw") {
     gameOver = true;
     banner("½–½ Draw — insufficient material", "draw");
+    turn.className = "";
     turn.textContent = "Draw";
-  } else if (word === "check") {
-    turn.textContent = "Check!";
-  } else {
-    turn.textContent = "";
+    return;
   }
+  // Persistent out-of-sync indicator so an illegal move stays visible until fixed.
+  if (!session.inSync()) {
+    turn.className = "outofsync";
+    turn.textContent = "⚠ Illegal move — board out of sync. Restore the last legal position.";
+    return;
+  }
+  turn.className = "";
+  turn.textContent = (word === "check" ? "Check! " : "") + session.sideToMove() + " to move";
 }
 
 function resetGame() {
   gameOver = false;
+  startChecked = false;
   $("moves").innerHTML = "";
   $("banner").className = "banner";
   $("banner").textContent = "";
+  $("turn").className = "";
+  $("turn").textContent = "";
   highlightCheck(-1);
 }
 

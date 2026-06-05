@@ -16,6 +16,17 @@ export class DgtSession {
      */
     fen(): string;
     /**
+     * Whether the physical board matches the legal game (false right after an
+     * illegal move, until the position is restored).
+     */
+    inSync(): boolean;
+    /**
+     * Whether the board is currently the standard starting position — referee
+     * mode needs this to begin. Useful for warning when the board is set up
+     * wrong or the flip is the wrong way round.
+     */
+    isStartPosition(): boolean;
+    /**
      * Create a session. Pass `flip = true` if White sits at the end of the
      * board away from the cable. Refereeing assumes the game starts from the
      * standard initial position.
@@ -26,6 +37,10 @@ export class DgtSession {
      * board, referees each move, and records events.
      */
     push(bytes: Uint8Array): void;
+    /**
+     * Whose turn it is in the refereed game (`"White"` / `"Black"`).
+     */
+    sideToMove(): string;
     /**
      * The current game status as a word: `normal`, `check`, `checkmate:White`,
      * `checkmate:Black`, `stalemate`, or `draw`.
@@ -59,8 +74,11 @@ export interface InitOutput {
     readonly __wbg_dgtsession_free: (a: number, b: number) => void;
     readonly dgtsession_checkedSquare: (a: number) => number;
     readonly dgtsession_fen: (a: number) => [number, number];
+    readonly dgtsession_inSync: (a: number) => number;
+    readonly dgtsession_isStartPosition: (a: number) => number;
     readonly dgtsession_new: (a: number) => number;
     readonly dgtsession_push: (a: number, b: number, c: number) => void;
+    readonly dgtsession_sideToMove: (a: number) => [number, number];
     readonly dgtsession_status: (a: number) => [number, number];
     readonly dgtsession_takeEvents: (a: number) => [number, number];
     readonly initSequence: () => [number, number];

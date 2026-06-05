@@ -39,6 +39,25 @@ export class DgtSession {
         }
     }
     /**
+     * Whether the physical board matches the legal game (false right after an
+     * illegal move, until the position is restored).
+     * @returns {boolean}
+     */
+    inSync() {
+        const ret = wasm.dgtsession_inSync(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Whether the board is currently the standard starting position — referee
+     * mode needs this to begin. Useful for warning when the board is set up
+     * wrong or the flip is the wrong way round.
+     * @returns {boolean}
+     */
+    isStartPosition() {
+        const ret = wasm.dgtsession_isStartPosition(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * Create a session. Pass `flip = true` if White sits at the end of the
      * board away from the cable. Refereeing assumes the game starts from the
      * standard initial position.
@@ -59,6 +78,22 @@ export class DgtSession {
         const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.dgtsession_push(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Whose turn it is in the refereed game (`"White"` / `"Black"`).
+     * @returns {string}
+     */
+    sideToMove() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.dgtsession_sideToMove(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * The current game status as a word: `normal`, `check`, `checkmate:White`,

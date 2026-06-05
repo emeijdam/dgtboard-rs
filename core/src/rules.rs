@@ -96,6 +96,11 @@ impl RefereedGame {
         self.in_sync
     }
 
+    /// Whose turn it is in the refereed game.
+    pub fn turn(&self) -> Color {
+        turn_color(&self.position)
+    }
+
     /// The square (in DGT index order, 0 = a8) of the king that is in check, if
     /// any — useful for highlighting.
     pub fn checked_square(&self) -> Option<usize> {

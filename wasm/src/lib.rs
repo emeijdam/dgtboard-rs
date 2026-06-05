@@ -8,7 +8,7 @@
 //! happens in the shared core — this file is just glue.
 
 use dgtboard_core::protocol::cmd;
-use dgtboard_core::{Decoder, Event, RefereedGame, Ruling, Status};
+use dgtboard_core::{Board, Decoder, Event, RefereedGame, Ruling, Status};
 use wasm_bindgen::prelude::*;
 
 /// A live decoding + refereeing session.
@@ -84,6 +84,27 @@ impl DgtSession {
     #[wasm_bindgen(js_name = checkedSquare)]
     pub fn checked_square(&self) -> i32 {
         self.game.checked_square().map(|i| i as i32).unwrap_or(-1)
+    }
+
+    /// Whose turn it is in the refereed game (`"White"` / `"Black"`).
+    #[wasm_bindgen(js_name = sideToMove)]
+    pub fn side_to_move(&self) -> String {
+        self.game.turn().to_string()
+    }
+
+    /// Whether the physical board matches the legal game (false right after an
+    /// illegal move, until the position is restored).
+    #[wasm_bindgen(js_name = inSync)]
+    pub fn in_sync(&self) -> bool {
+        self.game.in_sync()
+    }
+
+    /// Whether the board is currently the standard starting position — referee
+    /// mode needs this to begin. Useful for warning when the board is set up
+    /// wrong or the flip is the wrong way round.
+    #[wasm_bindgen(js_name = isStartPosition)]
+    pub fn is_start_position(&self) -> bool {
+        *self.decoder.board() == Board::startpos()
     }
 
     /// Drain events recorded since the last call, newline-separated. Each line

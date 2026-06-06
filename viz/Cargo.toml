@@ -1,0 +1,47 @@
+[package]
+name = "dgtboard-bevy"
+description = "An 'extreme wow' 3D WebGL/native chess-board viewer that renders a live DGT board, driven entirely by dgtboard-core. Procedural Staunton pieces, PBR lighting, shadows, bloom, and an orbit camera."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lib]
+name = "dgtboard_bevy"
+# cdylib for the wasm build (wasm-pack), rlib so the native bin can link it.
+crate-type = ["cdylib", "rlib"]
+
+# Native binary: `cargo run -p dgtboard-bevy --bin dgt3d`.
+[[bin]]
+name = "dgt3d"
+path = "src/main.rs"
+
+[dependencies]
+dgtboard-core = { path = "../core", version = "0.1.0" }
+
+# Bevy with a hand-picked feature set: just enough for a PBR 3D scene with
+# bloom and shadows, no audio / gltf / UI / sprites. Per-target features below
+# add the platform backend (Metal on macOS comes from bevy_render's wgpu;
+# WebGL2 and x11 are opted in per target since features are additive).
+[dependencies.bevy]
+version = "0.14"
+default-features = false
+features = [
+    "bevy_winit",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_asset",
+]
+
+# wasm: WebGL2 backend + the JS bridge glue and a readable panic message.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.14", default-features = false, features = ["webgl2"] }
+wasm-bindgen = { workspace = true }
+console_error_panic_hook = "0.1"
+
+# Linux native needs a window backend; macOS/Windows get theirs from bevy_winit.
+[target.'cfg(target_os = "linux")'.dependencies]
+bevy = { version = "0.14", default-features = false, features = ["x11"] }

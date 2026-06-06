@@ -29,22 +29,71 @@ const PIECE_NL = {
   p: ["de", "pion"], n: ["het", "paard"], b: ["de", "loper"],
   r: ["de", "toren"], q: ["de", "dame"], k: ["de", "koning"],
 };
-let dutchVoice = null;
-function pickDutchVoice() {
+let nlVoices = [];
+// Higher score = more preferred: real nl-NL, installed locally (not a flaky
+// remote/network voice).
+function voiceScore(v) {
+  const lang = (v.lang || "").toLowerCase().replace("_", "-");
+  let s = 0;
+  if (lang === "nl-nl") s += 3;
+  else if (lang.startsWith("nl")) s += 2;
+  if (v.localService) s += 1;
+  return s;
+}
+function refreshVoices() {
   if (!("speechSynthesis" in window)) return;
-  const voices = speechSynthesis.getVoices();
-  dutchVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("nl")) || null;
+  nlVoices = speechSynthesis
+    .getVoices()
+    .filter((v) => (v.lang || "").toLowerCase().startsWith("nl"))
+    .sort((a, b) => voiceScore(b) - voiceScore(a));
+  const sel = $("voicePick");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if (!nlVoices.length) {
+    sel.appendChild(new Option("(geen Nederlandse stem gevonden)", ""));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  nlVoices.forEach((v, i) => sel.appendChild(new Option(`${v.name} (${v.lang})`, String(i))));
+  sel.value = prev && sel.querySelector(`option[value="${prev}"]`) ? prev : "0";
+}
+function chosenVoice() {
+  if (!nlVoices.length) return null;
+  const i = parseInt($("voicePick").value, 10);
+  return nlVoices[Number.isNaN(i) ? 0 : i] || nlVoices[0];
 }
 function speakDutch(text) {
   if (!$("voice").checked || !("speechSynthesis" in window)) return;
+  if (!nlVoices.length) refreshVoices(); // voices may have loaded late
+  const voice = chosenVoice();
   speechSynthesis.cancel(); // don't let messages pile up
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = "nl-NL";
-  if (dutchVoice) u.voice = dutchVoice;
+  // Assign an actual Dutch voice — without this the browser uses its default
+  // (often English) voice and just reads the Dutch text aloud.
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang;
+  } else {
+    u.lang = "nl-NL";
+  }
   u.rate = 0.95;
   u.pitch = 1.05;
   speechSynthesis.speak(u);
 }
+function speakStatus(status) {
+  if (status === "check") {
+    speakDutch("Schaak!");
+  } else if (status.startsWith("checkmate:")) {
+    const winner = status.split(":")[1] === "White" ? "Wit" : "Zwart";
+    speakDutch(`Schaakmat! ${winner} wint. Goed gespeeld!`);
+  } else if (status === "stalemate") {
+    speakDutch("Pat! Niemand kan meer zetten. Het is gelijkspel.");
+  } else if (status === "draw") {
+    speakDutch("Remise. Het is gelijkspel.");
+  }
+}
+
 function illegalDutch(reason, pieceLetter) {
   const [art, name] = PIECE_NL[pieceLetter] || ["het", "stuk"];
   switch (reason) {
@@ -74,8 +123,11 @@ async function main() {
   $("disconnect").addEventListener("click", disconnect);
   $("flip").addEventListener("change", onFlipToggle);
 
-  pickDutchVoice();
-  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = pickDutchVoice;
+  refreshVoices();
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = refreshVoices;
+  $("voiceTest").addEventListener("click", () =>
+    speakDutch("Hallo! Ik leg illegale zetten uit. Probeer maar een zet.")
+  );
 }
 
 // Flipping live: rebuild the session in the new orientation and re-request a
@@ -172,6 +224,7 @@ function render() {
         markSquares(parts[5], mate ? "matemove" : "lastmove");
         clearSquares(mate ? "lastmove" : "matemove");
         clearSquares("illegalsq");
+        speakStatus(parts[4]);
         if (!gameOver) clearBanner();
       } else if (parts[0] === "illegal" && !gameOver) {
         // illegal = uci, reason, pieceLetter

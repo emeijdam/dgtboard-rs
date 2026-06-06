@@ -33,6 +33,8 @@
     button:disabled { opacity: .4; cursor: default; }
     button.ghost { background: transparent; color: var(--ink); border: 1px solid #313a52; }
     label.flip { color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    select#voicePick { background: var(--panel); color: var(--ink); border: 1px solid #313a52; border-radius: 8px; padding: 8px 10px; font-size: 13px; max-width: 220px; }
+    #voiceTest { padding: 8px 12px; font-size: 13px; }
 
     #board {
       display: grid; grid-template-columns: repeat(8, var(--sq)); grid-template-rows: repeat(8, var(--sq));
@@ -92,6 +94,8 @@
         <button id="disconnect" class="ghost" disabled>Disconnect</button>
         <label class="flip"><input type="checkbox" id="flip" checked /> Flip 180°</label>
         <label class="flip"><input type="checkbox" id="voice" checked /> 🔊 Uitleg (NL)</label>
+        <select id="voicePick" title="Nederlandse stem"></select>
+        <button id="voiceTest" class="ghost" type="button">Test</button>
       </div>
       <div id="board"></div>
       <div id="banner" class="banner"></div>

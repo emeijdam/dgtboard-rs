@@ -47,15 +47,16 @@ impl DgtSession {
                     self.ply = 0;
                 }
                 Event::FieldUpdate { .. } => match self.game.update(self.decoder.board()) {
-                    Some(Ruling::Legal { san, status, .. }) => {
+                    Some(Ruling::Legal { uci, san, status }) => {
                         self.ply += 1;
                         let mover = if self.ply % 2 == 1 { "White" } else { "Black" };
                         self.events.push(format!(
-                            "move\t{}\t{}\t{}\t{}",
+                            "move\t{}\t{}\t{}\t{}\t{}",
                             self.ply,
                             mover,
                             san,
-                            status_word(status)
+                            status_word(status),
+                            uci
                         ));
                     }
                     Some(Ruling::Illegal { uci }) => {
@@ -109,7 +110,7 @@ impl DgtSession {
 
     /// Drain events recorded since the last call, newline-separated. Each line
     /// is one of:
-    /// - `move\t<ply>\t<color>\t<san>\t<status>`
+    /// - `move\t<ply>\t<color>\t<san>\t<status>\t<uci>`
     /// - `illegal\t<uci>`
     /// - `sync`
     #[wasm_bindgen(js_name = takeEvents)]

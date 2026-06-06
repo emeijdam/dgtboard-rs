@@ -124,12 +124,19 @@ function render() {
       if (!line) continue;
       const parts = line.split(TAB);
       if (parts[0] === "move") {
-        addMove(parts[1], parts[2], parts[3]); // ply, colour, SAN
+        // move = ply, colour, SAN, status, uci
+        addMove(parts[1], parts[2], parts[3]);
+        const mate = parts[4].startsWith("checkmate");
+        markSquares(parts[5], mate ? "matemove" : "lastmove");
+        clearSquares(mate ? "lastmove" : "matemove");
+        clearSquares("illegalsq");
         if (!gameOver) clearBanner();
       } else if (parts[0] === "illegal" && !gameOver) {
         showIllegal(parts[1]);
+        markSquares(parts[1], "illegalsq");
       } else if (parts[0] === "sync") {
         clearBanner();
+        clearSquares("illegalsq");
       }
     }
   }
@@ -198,6 +205,28 @@ function highlightCheck(idx) {
   if (idx >= 0 && cells[idx]) cells[idx].classList.add("check");
 }
 
+// Algebraic square ("e4") -> board cell index (0 = a8, matching renderBoard).
+function squareIndex(sq) {
+  const file = sq.charCodeAt(0) - 97; // 'a'
+  const rank = sq.charCodeAt(1) - 48; // '1'
+  if (file < 0 || file > 7 || rank < 1 || rank > 8) return -1;
+  return file + 8 * (8 - rank);
+}
+
+function clearSquares(cls) {
+  for (const c of $("board").children) c.classList.remove(cls);
+}
+
+// Highlight the from/to squares of a UCI move (e.g. "e2e4", "e7e8q").
+function markSquares(uci, cls) {
+  clearSquares(cls);
+  const cells = $("board").children;
+  for (const sq of [uci.slice(0, 2), uci.slice(2, 4)]) {
+    const idx = squareIndex(sq);
+    if (idx >= 0 && cells[idx]) cells[idx].classList.add(cls);
+  }
+}
+
 function banner(text, type) {
   const el = $("banner");
   el.textContent = text;
@@ -258,6 +287,9 @@ function resetGame() {
   $("turn").className = "";
   $("turn").textContent = "";
   highlightCheck(-1);
+  clearSquares("lastmove");
+  clearSquares("matemove");
+  clearSquares("illegalsq");
 }
 
 function setConnected(on) {

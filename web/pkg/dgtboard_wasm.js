@@ -115,7 +115,7 @@ export class DgtSession {
     /**
      * Drain events recorded since the last call, newline-separated. Each line
      * is one of:
-     * - `move\t<ply>\t<color>\t<san>\t<status>`
+     * - `move\t<ply>\t<color>\t<san>\t<status>\t<uci>`
      * - `illegal\t<uci>`
      * - `sync`
      * @returns {string}

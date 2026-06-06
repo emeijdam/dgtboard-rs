@@ -1,0 +1,22 @@
+{
+  "name": "dgtboard-bevy",
+  "type": "module",
+  "description": "An 'extreme wow' 3D WebGL/native chess-board viewer that renders a live DGT board, driven entirely by dgtboard-core. Procedural Staunton pieces, PBR lighting, shadows, bloom, and an orbit camera.",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emeijdam/dgtboard-rs"
+  },
+  "files": [
+    "dgtboard_bevy_bg.wasm",
+    "dgtboard_bevy.js",
+    "dgtboard_bevy.d.ts"
+  ],
+  "main": "dgtboard_bevy.js",
+  "homepage": "https://github.com/emeijdam/dgtboard-rs",
+  "types": "dgtboard_bevy.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

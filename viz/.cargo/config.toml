@@ -1,0 +1,10 @@
+# Select getrandom's browser backend for the wasm build.
+#
+# Bevy pulls in `ahash`, which (since 0.8.12) depends on `getrandom 0.3`. On
+# `wasm32-unknown-unknown` getrandom 0.3 has no default backend — you must pick
+# one explicitly, or it fails to compile. `wasm_js` routes randomness through the
+# browser's `crypto.getRandomValues`. The matching `getrandom` feature is enabled
+# in viz/Cargo.toml's wasm dependency table. This only affects the wasm target;
+# native macOS/Linux builds are untouched.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

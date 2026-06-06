@@ -27,7 +27,10 @@ use bevy::prelude::*;
 #[allow(unused_imports)]
 use dgtboard_core::protocol::{self, cmd};
 use dgtboard_core::Color as PieceColor;
-use dgtboard_core::{Board, Decoder, Piece};
+use dgtboard_core::{Decoder, Piece};
+// `Board` is only referenced by the native start-position seeding.
+#[cfg(not(target_arch = "wasm32"))]
+use dgtboard_core::Board;
 
 mod pieces;
 use pieces::{kind_index, lathe, profile, KINDS};
@@ -119,8 +122,8 @@ pub fn build_app() -> App {
 
     app.insert_resource(ClearColor(Color::srgb(0.015, 0.016, 0.03)))
         .insert_resource(AmbientLight {
-            color: Color::srgb(0.45, 0.5, 0.7),
-            brightness: 55.0,
+            color: Color::srgb(0.62, 0.64, 0.72),
+            brightness: 120.0,
         })
         .insert_resource(Orbit::default())
         .insert_resource(BoardRes::new())
@@ -157,11 +160,25 @@ fn setup(
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             color: Color::srgb(1.0, 0.97, 0.9),
-            illuminance: 9000.0,
+            illuminance: 11500.0,
             shadows_enabled: true,
             ..default()
         },
         transform: Transform::from_xyz(7.0, 14.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ..default()
+    });
+
+    // Soft white fill from the camera/front side (a directional light gives even
+    // illuminance regardless of distance) so the faces we look at read true to
+    // their colour — bright White, dark matte Black. No shadows, just relief.
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            color: Color::srgb(0.92, 0.95, 1.0),
+            illuminance: 4500.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        transform: Transform::from_xyz(-3.0, 7.0, 11.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 
@@ -234,19 +251,22 @@ fn setup(
 
     // Glossy, marble-like piece materials — light base for White, dark for Black.
     let white = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.92, 0.90, 0.86),
-        perceptual_roughness: 0.22,
+        base_color: Color::srgb(0.94, 0.92, 0.88),
+        perceptual_roughness: 0.34,
         metallic: 0.05,
-        reflectance: 0.6,
+        reflectance: 0.55,
+        // A gentle self-lit floor so ivory pieces always read clearly lighter
+        // than the matte-black set, even on faces the key light misses.
+        emissive: LinearRgba::rgb(0.16, 0.16, 0.2),
         double_sided: true,
         cull_mode: None,
         ..default()
     });
     let black = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.045, 0.05, 0.07),
-        perceptual_roughness: 0.18,
-        metallic: 0.25,
-        reflectance: 0.6,
+        base_color: Color::srgb(0.02, 0.022, 0.03),
+        perceptual_roughness: 0.3,
+        metallic: 0.0,
+        reflectance: 0.35,
         double_sided: true,
         cull_mode: None,
         ..default()
@@ -329,8 +349,7 @@ fn sync_system(
 
     // Copy the 64 squares so we can mutate the entity map without aliasing.
     let squares = board.decoder.board().squares;
-    for idx in 0..64usize {
-        let want = squares[idx];
+    for (idx, &want) in squares.iter().enumerate() {
         let have = board.entities[idx].map(|(_, p)| p);
         if want == have {
             continue;
@@ -409,6 +428,7 @@ fn orbit_position(orbit: &Orbit) -> Vec3 {
 }
 
 /// The raw DGT byte code for a piece (inverse of `Piece::from_code`).
+#[cfg(not(target_arch = "wasm32"))]
 fn piece_code(p: Piece) -> u8 {
     use Piece::*;
     match p {

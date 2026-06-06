@@ -8,7 +8,7 @@
 //! happens in the shared core — this file is just glue.
 
 use dgtboard_core::protocol::cmd;
-use dgtboard_core::{Board, Decoder, Event, RefereedGame, Ruling, Status};
+use dgtboard_core::{Board, Decoder, Event, IllegalReason, RefereedGame, Ruling, Status};
 use wasm_bindgen::prelude::*;
 
 /// A live decoding + refereeing session.
@@ -59,8 +59,13 @@ impl DgtSession {
                             uci
                         ));
                     }
-                    Some(Ruling::Illegal { uci }) => {
-                        self.events.push(format!("illegal\t{uci}"));
+                    Some(Ruling::Illegal { uci, reason, piece }) => {
+                        self.events.push(format!(
+                            "illegal\t{}\t{}\t{}",
+                            uci,
+                            reason_word(reason),
+                            piece.fen_char().to_ascii_lowercase()
+                        ));
                     }
                     Some(Ruling::BackInSync) => self.events.push("sync".to_string()),
                     None => {}
@@ -111,13 +116,23 @@ impl DgtSession {
     /// Drain events recorded since the last call, newline-separated. Each line
     /// is one of:
     /// - `move\t<ply>\t<color>\t<san>\t<status>\t<uci>`
-    /// - `illegal\t<uci>`
+    /// - `illegal\t<uci>\t<reason>\t<piece>` (reason: turn/nopiece/check/own/move)
     /// - `sync`
     #[wasm_bindgen(js_name = takeEvents)]
     pub fn take_events(&mut self) -> String {
         let out = self.events.join("\n");
         self.events.clear();
         out
+    }
+}
+
+fn reason_word(reason: IllegalReason) -> &'static str {
+    match reason {
+        IllegalReason::NotYourTurn => "turn",
+        IllegalReason::NoPieceThere => "nopiece",
+        IllegalReason::MustGetOutOfCheck => "check",
+        IllegalReason::OwnPieceOnTarget => "own",
+        IllegalReason::IllegalMove => "move",
     }
 }
 

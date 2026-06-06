@@ -22,6 +22,45 @@ const NL = "\n";
 const $ = (id) => document.getElementById(id);
 let port, reader, writer, session, keepReading = false, gameOver = false, startChecked = false;
 
+// --- Dutch voice coach (Web Speech API) -----------------------------------
+// Speaks a friendly, child-friendly Dutch explanation when an illegal move is
+// played, and a little cheer when the board is fixed.
+const PIECE_NL = {
+  p: ["de", "pion"], n: ["het", "paard"], b: ["de", "loper"],
+  r: ["de", "toren"], q: ["de", "dame"], k: ["de", "koning"],
+};
+let dutchVoice = null;
+function pickDutchVoice() {
+  if (!("speechSynthesis" in window)) return;
+  const voices = speechSynthesis.getVoices();
+  dutchVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("nl")) || null;
+}
+function speakDutch(text) {
+  if (!$("voice").checked || !("speechSynthesis" in window)) return;
+  speechSynthesis.cancel(); // don't let messages pile up
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "nl-NL";
+  if (dutchVoice) u.voice = dutchVoice;
+  u.rate = 0.95;
+  u.pitch = 1.05;
+  speechSynthesis.speak(u);
+}
+function illegalDutch(reason, pieceLetter) {
+  const [art, name] = PIECE_NL[pieceLetter] || ["het", "stuk"];
+  switch (reason) {
+    case "turn":
+      return "Wacht even! Het is nog niet jouw beurt. De andere speler is aan zet.";
+    case "nopiece":
+      return "Hmm, op dat vakje stond geen stuk. Zet de stukken even terug zoals ze net stonden.";
+    case "check":
+      return "Pas op! Jouw koning staat schaak. Je moet eerst je koning in veiligheid brengen.";
+    case "own":
+      return "Daar staat al een eigen stuk. Op je eigen stuk mag je niet gaan staan. Kies een ander vakje.";
+    default:
+      return `Oeps! Zo mag ${art} ${name} niet lopen. Zet hem maar terug en probeer een andere zet.`;
+  }
+}
+
 async function main() {
   await init();
   $("version").textContent = "core v" + version();
@@ -34,6 +73,9 @@ async function main() {
   $("connect").addEventListener("click", connect);
   $("disconnect").addEventListener("click", disconnect);
   $("flip").addEventListener("change", onFlipToggle);
+
+  pickDutchVoice();
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = pickDutchVoice;
 }
 
 // Flipping live: rebuild the session in the new orientation and re-request a
@@ -132,11 +174,14 @@ function render() {
         clearSquares("illegalsq");
         if (!gameOver) clearBanner();
       } else if (parts[0] === "illegal" && !gameOver) {
+        // illegal = uci, reason, pieceLetter
         showIllegal(parts[1]);
         markSquares(parts[1], "illegalsq");
+        speakDutch(illegalDutch(parts[2], parts[3]));
       } else if (parts[0] === "sync") {
         clearBanner();
         clearSquares("illegalsq");
+        speakDutch("Goed gedaan! Nu klopt het bord weer. Speel maar verder.");
       }
     }
   }

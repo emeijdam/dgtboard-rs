@@ -41,6 +41,21 @@ impl Status {
     }
 }
 
+/// Why an attempted move isn't legal — coarse, beginner-friendly categories.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IllegalReason {
+    /// The moved piece belongs to the side that isn't to move.
+    NotYourTurn,
+    /// There was no piece on the from-square in the legal game (board drifted).
+    NoPieceThere,
+    /// The mover's king is in check and the move doesn't address it.
+    MustGetOutOfCheck,
+    /// The destination already holds one of the mover's own pieces.
+    OwnPieceOnTarget,
+    /// The piece can't make that move (wrong geometry, or it exposes the king).
+    IllegalMove,
+}
+
 /// The verdict on a settled board change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ruling {
@@ -58,6 +73,10 @@ pub enum Ruling {
     Illegal {
         /// The attempted move in UCI.
         uci: String,
+        /// Why it isn't legal.
+        reason: IllegalReason,
+        /// The piece that was moved (for naming it in a message).
+        piece: Piece,
     },
     /// The board was out of sync and has been restored to the legal position.
     BackInSync,
@@ -148,7 +167,32 @@ impl RefereedGame {
             }
             None => {
                 self.in_sync = false;
-                Some(Ruling::Illegal { uci })
+                let reason = self.illegal_reason(&mv);
+                Some(Ruling::Illegal {
+                    uci,
+                    reason,
+                    piece: mv.piece,
+                })
+            }
+        }
+    }
+
+    /// Classify *why* a detected move is illegal, for friendly explanations.
+    fn illegal_reason(&self, mv: &crate::DetectedMove) -> IllegalReason {
+        let from = shak_square(mv.from.0 as usize);
+        let to = shak_square(mv.to.0 as usize);
+        let board = self.position.board();
+        match board.piece_at(from) {
+            None => IllegalReason::NoPieceThere,
+            Some(p) if p.color != self.position.turn() => IllegalReason::NotYourTurn,
+            Some(p) => {
+                if self.position.is_check() {
+                    IllegalReason::MustGetOutOfCheck
+                } else if board.piece_at(to).map(|t| t.color) == Some(p.color) {
+                    IllegalReason::OwnPieceOnTarget
+                } else {
+                    IllegalReason::IllegalMove
+                }
             }
         }
     }
@@ -288,7 +332,16 @@ mod tests {
         b.set(e4, None);
         assert!(game.update(&b).is_none());
         b.set(e6, Some(Piece::WhitePawn));
-        assert_eq!(game.update(&b), Some(Ruling::Illegal { uci: "e4e6".into() }));
+        // It's Black's turn after 1.e4, so moving the White pawn again is
+        // flagged as "not your turn".
+        assert_eq!(
+            game.update(&b),
+            Some(Ruling::Illegal {
+                uci: "e4e6".into(),
+                reason: IllegalReason::NotYourTurn,
+                piece: Piece::WhitePawn,
+            })
+        );
         assert!(!game.in_sync());
 
         // While out of sync, nothing is reported until the board is restored.
@@ -297,6 +350,36 @@ mod tests {
         b.set(e4, Some(Piece::WhitePawn));
         assert_eq!(game.update(&b), Some(Ruling::BackInSync));
         assert!(game.in_sync());
+    }
+
+    #[test]
+    fn illegal_reason_not_your_turn() {
+        use crate::board::{Board, Piece, Square};
+        let mut game = RefereedGame::new();
+        let mut b = Board::startpos();
+        let (e2, e4, d2, d4) = (
+            Square::at(4, 2),
+            Square::at(4, 4),
+            Square::at(3, 2),
+            Square::at(3, 4),
+        );
+        // 1. e4 (legal)
+        b.set(e2, None);
+        game.update(&b);
+        b.set(e4, Some(Piece::WhitePawn));
+        assert!(matches!(game.update(&b), Some(Ruling::Legal { .. })));
+        // White tries to move again — not White's turn.
+        b.set(d2, None);
+        game.update(&b);
+        b.set(d4, Some(Piece::WhitePawn));
+        assert_eq!(
+            game.update(&b),
+            Some(Ruling::Illegal {
+                uci: "d2d4".into(),
+                reason: IllegalReason::NotYourTurn,
+                piece: Piece::WhitePawn,
+            })
+        );
     }
 
     #[test]

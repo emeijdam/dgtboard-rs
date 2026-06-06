@@ -27,10 +27,7 @@ use bevy::prelude::*;
 #[allow(unused_imports)]
 use dgtboard_core::protocol::{self, cmd};
 use dgtboard_core::Color as PieceColor;
-use dgtboard_core::{Decoder, Piece};
-// `Board` is only referenced by the native start-position seeding.
-#[cfg(not(target_arch = "wasm32"))]
-use dgtboard_core::Board;
+use dgtboard_core::{Board, Decoder, Piece};
 
 mod pieces;
 use pieces::{kind_index, lathe, profile, KINDS};
@@ -47,9 +44,26 @@ static RESEED: AtomicBool = AtomicBool::new(false);
 /// so the window opens onto a populated board, then runs the app.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() {
-    let dump = synthetic_board_dump(&Board::startpos());
-    QUEUE.lock().unwrap().extend_from_slice(&dump);
+    preview_seed();
     build_app().run();
+}
+
+/// Seed the queue with a start-position board dump so the scene shows pieces
+/// before a real board is connected. Honours the current [`FLIP`] so the
+/// preview always decodes to the standard start position. A real board's dump
+/// (sent in response to `init_sequence`) simply replaces it on connect.
+fn preview_seed() {
+    let board = if FLIP.load(Ordering::Relaxed) {
+        // The decoder will rotate the dump by 180° when flipped; pre-rotate so
+        // the result is still the standard start position.
+        Board::startpos().rotated_180()
+    } else {
+        Board::startpos()
+    };
+    QUEUE
+        .lock()
+        .unwrap()
+        .extend_from_slice(&synthetic_board_dump(&board));
 }
 
 /// The world position of a board square in DGT index order (0 = a8). File runs
@@ -428,7 +442,6 @@ fn orbit_position(orbit: &Orbit) -> Vec3 {
 }
 
 /// The raw DGT byte code for a piece (inverse of `Piece::from_code`).
-#[cfg(not(target_arch = "wasm32"))]
 fn piece_code(p: Piece) -> u8 {
     use Piece::*;
     match p {
@@ -448,8 +461,7 @@ fn piece_code(p: Piece) -> u8 {
 }
 
 /// A framed `BOARD_DUMP` message for `board`, as the hardware would send it.
-/// Used to seed the native window with the start position.
-#[cfg(not(target_arch = "wasm32"))]
+/// Used to seed the scene with a preview start position (see [`preview_seed`]).
 fn synthetic_board_dump(board: &Board) -> Vec<u8> {
     let len = 3 + 64usize; // header + 64 piece codes
     let mut frame = Vec::with_capacity(len);
@@ -474,6 +486,8 @@ pub mod wasm_api {
     pub fn start(flip: bool) {
         console_error_panic_hook::set_once();
         FLIP.store(flip, Ordering::Relaxed);
+        // Show the start position immediately, before any board is connected.
+        preview_seed();
         build_app().run();
     }
 
@@ -489,6 +503,9 @@ pub mod wasm_api {
     pub fn set_flip(flip: bool) {
         FLIP.store(flip, Ordering::Relaxed);
         RESEED.store(true, Ordering::Relaxed);
+        // Keep the preview populated after a flip while disconnected; if a board
+        // is connected, its fresh dump replaces this moments later.
+        preview_seed();
     }
 
     /// The bytes to write to the board to begin: reset, request a full dump,

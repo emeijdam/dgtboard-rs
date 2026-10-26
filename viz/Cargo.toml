@@ -22,9 +22,10 @@ path = "src/main.rs"
 dgtboard-core = { path = "../core", version = "0.1.0" }
 
 # Bevy with a hand-picked feature set: just enough for a PBR 3D scene with
-# bloom and shadows, no audio / gltf / UI / sprites. Per-target features below
-# add the platform backend (Metal on macOS comes from bevy_render's wgpu;
-# WebGL2 and x11 are opted in per target since features are additive).
+# bloom and shadows plus the glTF loader for the scanned piece set (JPEG
+# textures), no audio / UI / sprites. Per-target features below add the
+# platform backend (Metal on macOS comes from bevy_render's wgpu; WebGL2 and
+# x11 are opted in per target since features are additive).
 [dependencies.bevy]
 version = "0.14"
 default-features = false
@@ -34,6 +35,9 @@ features = [
     "bevy_core_pipeline",
     "bevy_pbr",
     "bevy_asset",
+    "bevy_gltf",
+    "jpeg",
+    "png",
 ]
 
 # wasm: WebGL2 backend + the JS bridge glue and a readable panic message.

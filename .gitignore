@@ -1,2 +1,4 @@
 /target
 Cargo.lock
+# symlink to viz/assets made by web3d/build.sh
+/web3d/assets

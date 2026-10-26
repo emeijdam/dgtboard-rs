@@ -12,6 +12,11 @@ cd "$(dirname "$0")/.."
 
 PATH="$HOME/.cargo/bin:$PATH" wasm-pack build viz --target web --out-dir ../web3d/pkg --release
 
+# The scanned piece set is fetched by the wasm at runtime from ./assets/…
+# relative to the page, so expose viz/assets there (a relative symlink; the
+# http.server below follows it).
+ln -sfn ../viz/assets web3d/assets
+
 cat <<'EOF'
 
 ✅ Built web3d/pkg. Serve the demo over http (Web Serial needs a secure

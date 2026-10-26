@@ -19,6 +19,28 @@ async function main() {
   $("connect").addEventListener("click", connect);
   $("disconnect").addEventListener("click", disconnect);
   $("flip").addEventListener("change", onFlipToggle);
+  // Boot the scene right away so the start position (and the scanned set, as
+  // it streams in) is on screen before any board is connected.
+  await bootScene();
+}
+
+// Boot the wasm + Bevy app exactly once; it renders into <canvas id="scene">
+// and runs its own loop forever. The byte queue is shared with `push_bytes`.
+async function bootScene() {
+  if (started) return;
+  await init();
+  started = true;
+  try {
+    start($("flip").checked);
+  } catch (e) {
+    // Bevy/winit on wasm hands control to the browser's event loop by
+    // throwing a sentinel ("Using exceptions for control flow"); anything
+    // else is a real error.
+    if (!String(e).includes("control flow")) {
+      setStatus("3D scene failed to start: " + e, true);
+      throw e;
+    }
+  }
 }
 
 async function connect() {
@@ -30,13 +52,7 @@ async function connect() {
     return;
   }
 
-  // Boot the wasm + Bevy app exactly once; it renders into <canvas id="scene">
-  // and runs its own loop forever. The byte queue is shared with `push_bytes`.
-  if (!started) {
-    await init();
-    start($("flip").checked);
-    started = true;
-  }
+  await bootScene();
 
   writer = port.writable.getWriter();
   reader = port.readable.getReader();
@@ -65,7 +81,7 @@ async function readLoop() {
 // Flip live: tell the wasm to reseed in the new orientation, then re-request a
 // full dump so the position re-streams immediately.
 async function onFlipToggle() {
-  if (!started) return; // not connected yet — the setting applies on connect
+  if (!started) return; // scene not booted yet — the setting applies on boot
   set_flip($("flip").checked);
   if (keepReading && writer) {
     try {

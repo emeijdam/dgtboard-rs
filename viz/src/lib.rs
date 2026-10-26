@@ -3,8 +3,10 @@
 //! The whole scene is driven by [`dgtboard_core`]: a [`Decoder`] turns the
 //! board's serial byte stream into board state, and a Bevy system diffs that
 //! state against the 3D pieces every frame, spawning and despawning to match.
-//! Pieces are **procedurally generated** lathe meshes (see [`pieces`]) — no
-//! assets — lit with PBR materials, real shadows, and bloom.
+//! Pieces are Poly Haven's photoscanned marble chess set (CC0; see [`set`]),
+//! lit with PBR materials, real shadows, and bloom. While that glTF loads — or
+//! if it's missing — procedurally generated lathe pieces (see [`pieces`]) and
+//! flat tiles stand in.
 //!
 //! ## Transport
 //!
@@ -18,6 +20,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use bevy::asset::AssetMetaCheck;
 use bevy::core_pipeline::bloom::BloomSettings;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
@@ -30,7 +33,9 @@ use dgtboard_core::Color as PieceColor;
 use dgtboard_core::{Board, Decoder, Piece};
 
 mod pieces;
+mod set;
 use pieces::{kind_index, lathe, profile, KINDS};
+use set::PieceSet;
 
 /// Bytes received from the board, pushed by JS (wasm) or seeded natively, and
 /// drained by `decode_system`.
@@ -90,7 +95,8 @@ impl BoardRes {
     }
 }
 
-/// Shared mesh + material handles for the pieces, built once at startup.
+/// Shared mesh + material handles for the fallback lathe pieces, built once at
+/// startup.
 #[derive(Resource)]
 struct PieceAssets {
     /// One mesh per [`pieces::Kind`], indexed by `kind as usize`.
@@ -98,6 +104,10 @@ struct PieceAssets {
     white: Handle<StandardMaterial>,
     black: Handle<StandardMaterial>,
 }
+
+/// Marker for the flat fallback tiles (replaced by the scanned board).
+#[derive(Component)]
+struct Tile;
 
 /// Manual orbit camera state, updated from the mouse each frame.
 #[derive(Resource)]
@@ -122,17 +132,27 @@ impl Default for Orbit {
 /// Construct the Bevy app (shared by the native and wasm entry points).
 pub fn build_app() -> App {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "dgt3d — live DGT board".into(),
-            // On wasm, render into the page's <canvas id="scene">.
-            canvas: Some("#scene".into()),
-            fit_canvas_to_parent: true,
-            prevent_default_event_handling: false,
-            ..default()
-        }),
-        ..default()
-    }));
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "dgt3d — live DGT board".into(),
+                    // On wasm, render into the page's <canvas id="scene">.
+                    canvas: Some("#scene".into()),
+                    fit_canvas_to_parent: true,
+                    prevent_default_event_handling: false,
+                    ..default()
+                }),
+                ..default()
+            })
+            .set(AssetPlugin {
+                file_path: set::asset_root(),
+                // No `.meta` sidecars ship with the assets; skip probing for
+                // them (on wasm each probe is a 404 round trip).
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            }),
+    );
 
     app.insert_resource(ClearColor(Color::srgb(0.015, 0.016, 0.03)))
         .insert_resource(AmbientLight {
@@ -141,14 +161,17 @@ pub fn build_app() -> App {
         })
         .insert_resource(Orbit::default())
         .insert_resource(BoardRes::new())
-        .add_systems(Startup, setup)
-        .add_systems(Update, (decode_system, sync_system, orbit_camera));
+        .add_systems(Startup, (setup, set::start_loading))
+        .add_systems(
+            Update,
+            (decode_system, set::resolve_set, sync_system, orbit_camera).chain(),
+        );
 
     app
 }
 
 /// Build the scene: camera (HDR + bloom + ACES), lights, ground, 64 tiles, and
-/// the shared piece assets.
+/// the shared fallback piece assets.
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -197,7 +220,7 @@ fn setup(
     });
 
     // Two coloured accent point lights, each with a small glowing orb so bloom
-    // has something bright to bleed.
+    // has something bright to bleed. Kept gentle so the marble reads as marble.
     let orb = meshes.add(Sphere::new(0.16));
     spawn_accent(
         &mut commands,
@@ -230,7 +253,8 @@ fn setup(
         ..default()
     });
 
-    // 64 board tiles. a8 (idx 0) is a light square: (file + rank) even → light.
+    // 64 fallback board tiles. a8 (idx 0) is a light square: (file + rank)
+    // even → light. Replaced by the scanned board once the set loads.
     let light_tile = materials.add(StandardMaterial {
         base_color: Color::srgb(0.86, 0.84, 0.78),
         perceptual_roughness: 0.35,
@@ -250,20 +274,24 @@ fn setup(
         let file = idx % 8;
         let rank = 8 - idx / 8; // human rank, idx 0 = a8
         let light = (file + rank) % 2 == 0;
-        commands.spawn(PbrBundle {
-            mesh: tile_mesh.clone(),
-            material: if light {
-                light_tile.clone()
-            } else {
-                dark_tile.clone()
+        commands.spawn((
+            PbrBundle {
+                mesh: tile_mesh.clone(),
+                material: if light {
+                    light_tile.clone()
+                } else {
+                    dark_tile.clone()
+                },
+                // Tile top at y = 0: centre a half-thickness below.
+                transform: Transform::from_translation(square_world(idx) - Vec3::Y * 0.1),
+                ..default()
             },
-            // Tile top at y = 0: centre a half-thickness below.
-            transform: Transform::from_translation(square_world(idx) - Vec3::Y * 0.1),
-            ..default()
-        });
+            Tile,
+        ));
     }
 
-    // Glossy, marble-like piece materials — light base for White, dark for Black.
+    // Glossy, marble-like fallback piece materials — light base for White,
+    // dark for Black.
     let white = materials.add(StandardMaterial {
         base_color: Color::srgb(0.94, 0.92, 0.88),
         perceptual_roughness: 0.34,
@@ -307,7 +335,7 @@ fn spawn_accent(
     commands.spawn(PointLightBundle {
         point_light: PointLight {
             color,
-            intensity: 250_000.0,
+            intensity: 120_000.0,
             range: 40.0,
             radius: 0.16,
             shadows_enabled: false,
@@ -351,10 +379,12 @@ fn decode_system(mut commands: Commands, mut board: ResMut<BoardRes>) {
 }
 
 /// Diff the decoded board against the spawned pieces and reconcile (v1: pop in /
-/// pop out; a future v2 could animate slides).
+/// pop out; a future v2 could animate slides). Uses the scanned set once it has
+/// loaded, the lathe pieces until then.
 fn sync_system(
     mut commands: Commands,
     assets: Option<Res<PieceAssets>>,
+    set: Option<Res<PieceSet>>,
     mut board: ResMut<BoardRes>,
 ) {
     let Some(assets) = assets else {
@@ -373,28 +403,43 @@ fn sync_system(
             commands.entity(e).despawn_recursive();
         }
         if let Some(p) = want {
-            let mesh = assets.meshes[kind_index(p)].clone();
-            let material = if p.color() == PieceColor::White {
-                assets.white.clone()
-            } else {
-                assets.black.clone()
+            let black = p.color() == PieceColor::Black;
+            let entity = match set.as_deref() {
+                Some(set) => set::spawn_piece(&mut commands, set, kind_index(p), black, idx),
+                None => spawn_lathe_piece(&mut commands, &assets, p, black, idx),
             };
-            let mut transform = Transform::from_translation(square_world(idx));
-            // Spin black pieces around so any facing detail looks across the board.
-            if p.color() == PieceColor::Black {
-                transform.rotate_y(std::f32::consts::PI);
-            }
-            let entity = commands
-                .spawn(PbrBundle {
-                    mesh,
-                    material,
-                    transform,
-                    ..default()
-                })
-                .id();
             board.entities[idx] = Some((entity, p));
         }
     }
+}
+
+/// Spawn a fallback lathe piece at `idx`.
+fn spawn_lathe_piece(
+    commands: &mut Commands,
+    assets: &PieceAssets,
+    p: Piece,
+    black: bool,
+    idx: usize,
+) -> Entity {
+    let mesh = assets.meshes[kind_index(p)].clone();
+    let material = if black {
+        assets.black.clone()
+    } else {
+        assets.white.clone()
+    };
+    let mut transform = Transform::from_translation(square_world(idx));
+    // Spin black pieces around so any facing detail looks across the board.
+    if black {
+        transform.rotate_y(std::f32::consts::PI);
+    }
+    commands
+        .spawn(PbrBundle {
+            mesh,
+            material,
+            transform,
+            ..default()
+        })
+        .id()
 }
 
 /// Manual orbit camera: left-drag rotates yaw/pitch, scroll wheel zooms.

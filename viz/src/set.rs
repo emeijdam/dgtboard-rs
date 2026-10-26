@@ -218,8 +218,9 @@ pub fn resolve_set(
 }
 
 /// Spawn a scanned piece of `kind` at `square` (DGT index) and return its
-/// root entity. The scan's knights look along −X, so each side is turned a
-/// quarter turn to face its opponent (White looks down −Z, Black up +Z).
+/// root entity. The scan's knights look along +Z — towards White's edge of
+/// our board — so White's pieces get a half turn to face Black, and Black's
+/// stand as scanned.
 pub fn spawn_piece(
     commands: &mut Commands,
     set: &PieceSet,
@@ -230,11 +231,9 @@ pub fn spawn_piece(
     let piece = &set.pieces[kind_idx];
     let material = if black { set.black.clone() } else { set.white.clone() };
     let mut root = Transform::from_translation(square_world(square));
-    root.rotate_y(if black {
-        std::f32::consts::FRAC_PI_2
-    } else {
-        -std::f32::consts::FRAC_PI_2
-    });
+    if !black {
+        root.rotate_y(std::f32::consts::PI);
+    }
     commands
         .spawn(SpatialBundle::from_transform(root))
         .with_children(|parent| {

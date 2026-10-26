@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use bevy::asset::AssetMetaCheck;
 use bevy::core_pipeline::bloom::BloomSettings;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 // `protocol`/`cmd` are each used on only one target (native dump vs wasm API).
@@ -470,9 +470,14 @@ fn orbit_camera(
     for ev in motion.read() {
         drag += ev.delta;
     }
+    // Browsers report wheel deltas in pixels (dozens per notch) where native
+    // reports lines; normalise so one notch zooms about the same everywhere.
     let mut scroll = 0.0;
     for ev in wheel.read() {
-        scroll += ev.y;
+        scroll += match ev.unit {
+            MouseScrollUnit::Line => ev.y,
+            MouseScrollUnit::Pixel => ev.y / 40.0,
+        };
     }
 
     let mut changed = false;

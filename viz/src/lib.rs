@@ -15,7 +15,9 @@
 //! the board, and pushes every received chunk into [`wasm_api::push_bytes`].
 //! Those bytes land in a shared [`QUEUE`] that the Bevy `decode_system` drains.
 //! Natively, `main.rs` calls [`run`], which seeds the queue with a synthetic
-//! board dump so `cargo run --bin dgt3d` shows the start position to orbit.
+//! board dump so `cargo run --bin dgt3d` shows the start position at once,
+//! then a reader thread (see [`serial`]) opens the real board and streams its
+//! bytes into the same queue.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -33,6 +35,8 @@ use dgtboard_core::Color as PieceColor;
 use dgtboard_core::{Board, Decoder, Piece};
 
 mod pieces;
+#[cfg(not(target_arch = "wasm32"))]
+mod serial;
 mod set;
 use pieces::{kind_index, lathe, profile, KINDS};
 use set::PieceSet;
@@ -45,11 +49,23 @@ static FLIP: AtomicBool = AtomicBool::new(false);
 /// Set when the orientation changes: rebuild the decoder and clear the pieces.
 static RESEED: AtomicBool = AtomicBool::new(false);
 
+/// Native launch options (see `main.rs`).
+#[derive(Default, Clone, Debug)]
+pub struct Options {
+    /// Serial port path; auto-detected when `None`.
+    pub port: Option<String>,
+    /// Read the board rotated 180° (White at the end away from the cable).
+    pub flip: bool,
+}
+
 /// Native entry point (see `main.rs`). Seeds the queue with the start position
-/// so the window opens onto a populated board, then runs the app.
+/// so the window opens onto a populated board, starts the serial reader, then
+/// runs the app.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run() {
+pub fn run(options: Options) {
+    FLIP.store(options.flip, Ordering::Relaxed);
     preview_seed();
+    serial::spawn_reader(options.port);
     build_app().run();
 }
 

@@ -54,3 +54,10 @@ uuid = { version = "1", features = ["js"] }
 # Linux native needs a window backend; macOS/Windows get theirs from bevy_winit.
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { version = "0.14", default-features = false, features = ["x11"] }
+
+# Native: read a real board over serial (port auto-detection comes from the
+# `dgtboard` crate) and parse `dgt3d`'s command-line flags.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dgtboard = { path = "../native", version = "0.1.0" }
+serialport = { workspace = true }
+clap = { workspace = true }

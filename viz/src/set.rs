@@ -14,8 +14,6 @@
 //! when it resolves, the pieces and tiles are swapped for the scanned ones.
 //! If the assets are missing or broken, the lathe set simply stays.
 
-use std::path::Path;
-
 use bevy::asset::LoadState;
 use bevy::gltf::{Gltf, GltfMesh, GltfNode};
 use bevy::prelude::*;
@@ -63,7 +61,7 @@ pub fn asset_root() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let dev = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
-        if Path::new(dev).is_dir() {
+        if std::path::Path::new(dev).is_dir() {
             return dev.to_string();
         }
     }

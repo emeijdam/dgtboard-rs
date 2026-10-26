@@ -7,6 +7,10 @@
 //! [`Event`]s and board state. All the protocol/board/move-detection types are
 //! re-exported from the core, so you can `use dgtboard::{...}` for everything.
 //!
+//! Beyond the transport: [`pick_port`] auto-selects the board's USB port,
+//! [`lichess`] is a small Lichess API client (puzzles; ndjson streams), and
+//! [`puzzle`] solves Lichess puzzles on the board (or from the keyboard).
+//!
 //! ```no_run
 //! use dgtboard::{DgtBoard, Event};
 //! use std::time::Duration;
@@ -27,7 +31,10 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use serialport::SerialPort;
+use serialport::{SerialPort, SerialPortType};
+
+pub mod lichess;
+pub mod puzzle;
 
 // Re-export the whole core API so downstream code only needs `dgtboard`.
 pub use dgtboard_core::{
@@ -46,6 +53,8 @@ pub enum Error {
     Timeout(&'static str),
     #[error("malformed message: {0}")]
     Protocol(String),
+    #[error("{0}")]
+    Port(String),
 }
 
 /// Convenience alias.
@@ -169,4 +178,106 @@ impl DgtBoard {
 /// List the serial ports currently available on the system.
 pub fn available_ports() -> Result<Vec<serialport::SerialPortInfo>> {
     Ok(serialport::available_ports()?)
+}
+
+/// DGT's reported USB vendor id (seen on DGT e-Board / USB boards).
+pub const DGT_VID: u16 = 0x045b;
+
+/// Score a port as a DGT-board candidate; higher is better, `0` = not USB.
+pub fn dgt_score(p: &serialport::SerialPortInfo) -> u32 {
+    let SerialPortType::UsbPort(info) = &p.port_type else {
+        return 0;
+    };
+    let mut score = 1; // any USB serial port is a weak candidate
+    let looks_dgt = info.vid == DGT_VID
+        || info
+            .product
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase().contains("dgt"))
+            .unwrap_or(false)
+        || info
+            .manufacturer
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase().contains("game technology"))
+            .unwrap_or(false);
+    if looks_dgt {
+        score += 10;
+    }
+    // On macOS both cu.* and tty.* appear; cu.* is the one you want.
+    if p.port_name.contains("cu.") {
+        score += 1;
+    }
+    score
+}
+
+/// Pick a port: use the explicit one, else the best-scoring DGT/USB candidate
+/// (announced on stderr), else fail with guidance.
+pub fn pick_port(explicit: Option<String>) -> Result<String> {
+    if let Some(p) = explicit {
+        return Ok(p);
+    }
+    let ports = available_ports()?;
+    let mut candidates: Vec<_> = ports.iter().map(|p| (dgt_score(p), p)).collect();
+    candidates.retain(|(score, _)| *score > 0);
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+    match candidates.as_slice() {
+        [] => Err(Error::Port(
+            "no USB serial ports found. Run `dgt doctor` to diagnose the connection (driver / security), or pass --port.".into(),
+        )),
+        [(score, best), rest @ ..] => {
+            // Ambiguous only if a different *device* scores equally well; the
+            // cu/tty pair for one device is disambiguated by the cu.* bonus.
+            let tie = rest.iter().any(|(s, _)| s == score);
+            if tie {
+                let names: Vec<_> = candidates.iter().map(|(_, p)| p.port_name.as_str()).collect();
+                return Err(Error::Port(format!(
+                    "multiple equally-likely USB ports found ({}); pass --port to choose one",
+                    names.join(", ")
+                )));
+            }
+            eprintln!("Auto-selected port: {}", best.port_name);
+            Ok(best.port_name.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serialport::{SerialPortInfo, UsbPortInfo};
+
+    fn usb(name: &str, vid: u16, product: Option<&str>) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: name.into(),
+            port_type: SerialPortType::UsbPort(UsbPortInfo {
+                vid,
+                pid: 0x6001,
+                serial_number: None,
+                manufacturer: None,
+                product: product.map(str::to_string),
+            }),
+        }
+    }
+
+    #[test]
+    fn dgt_vendor_outscores_generic_usb_and_cu_beats_tty() {
+        let generic = usb("/dev/cu.usbserial-1", 0x0403, None);
+        let dgt_tty = usb("/dev/tty.usbserial-2", DGT_VID, None);
+        let dgt_cu = usb("/dev/cu.usbserial-2", DGT_VID, None);
+        let by_name = usb("/dev/ttyUSB0", 0x0403, Some("DGT e-Board"));
+        let not_usb = SerialPortInfo {
+            port_name: "/dev/cu.Bluetooth".into(),
+            port_type: SerialPortType::Unknown,
+        };
+        assert_eq!(dgt_score(&not_usb), 0);
+        assert!(dgt_score(&generic) < dgt_score(&dgt_tty));
+        assert!(dgt_score(&dgt_tty) < dgt_score(&dgt_cu));
+        assert_eq!(dgt_score(&by_name), dgt_score(&dgt_tty));
+    }
+
+    #[test]
+    fn explicit_port_wins() {
+        assert_eq!(pick_port(Some("COM3".into())).unwrap(), "COM3");
+    }
 }

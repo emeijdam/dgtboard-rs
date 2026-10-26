@@ -90,6 +90,27 @@ impl Piece {
         }
     }
 
+    /// The piece for a FEN letter (uppercase = white, lowercase = black), or
+    /// `None` for anything else.
+    pub fn from_fen_char(c: char) -> Option<Piece> {
+        use Piece::*;
+        Some(match c {
+            'P' => WhitePawn,
+            'R' => WhiteRook,
+            'N' => WhiteKnight,
+            'B' => WhiteBishop,
+            'K' => WhiteKing,
+            'Q' => WhiteQueen,
+            'p' => BlackPawn,
+            'r' => BlackRook,
+            'n' => BlackKnight,
+            'b' => BlackBishop,
+            'k' => BlackKing,
+            'q' => BlackQueen,
+            _ => return None,
+        })
+    }
+
     /// This piece's colour.
     pub fn color(self) -> Color {
         use Piece::*;
@@ -243,6 +264,38 @@ impl Board {
         Ok(Board { squares })
     }
 
+    /// Parse the piece-placement field of a FEN string (the first
+    /// space-separated field; anything after a space is ignored), e.g.
+    /// `rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR`.
+    pub fn from_fen_placement(fen: &str) -> Result<Board, crate::Error> {
+        let placement = fen.split_whitespace().next().unwrap_or("");
+        let bad = |why: String| crate::Error::Protocol(format!("bad FEN placement {placement:?}: {why}"));
+        let ranks: Vec<&str> = placement.split('/').collect();
+        if ranks.len() != 8 {
+            return Err(bad(format!("expected 8 ranks, got {}", ranks.len())));
+        }
+        let mut squares = [None; 64];
+        for (rank, text) in ranks.iter().enumerate() {
+            let mut file = 0usize;
+            for c in text.chars() {
+                if let Some(n) = c.to_digit(10) {
+                    file += n as usize;
+                    continue;
+                }
+                let piece = Piece::from_fen_char(c).ok_or_else(|| bad(format!("unknown piece {c:?}")))?;
+                if file >= 8 {
+                    return Err(bad(format!("rank {} is too long", 8 - rank)));
+                }
+                squares[rank * 8 + file] = Some(piece);
+                file += 1;
+            }
+            if file != 8 {
+                return Err(bad(format!("rank {} has {file} files", 8 - rank)));
+            }
+        }
+        Ok(Board { squares })
+    }
+
     /// The board rotated 180° (square `i` ↔ `63 - i`).
     ///
     /// The hardware numbers squares from the physical corner by the cable and
@@ -363,5 +416,20 @@ mod tests {
     #[test]
     fn empty_board_fen() {
         assert_eq!(Board::empty().fen_placement(), "8/8/8/8/8/8/8/8");
+    }
+
+    #[test]
+    fn fen_placement_round_trips() {
+        let start = Board::startpos();
+        assert_eq!(Board::from_fen_placement(&start.fen_placement()).unwrap(), start);
+        // Trailing FEN fields are ignored.
+        let mid = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
+        assert_eq!(
+            Board::from_fen_placement(mid).unwrap().fen_placement(),
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R"
+        );
+        assert!(Board::from_fen_placement("8/8/8").is_err());
+        assert!(Board::from_fen_placement("9/8/8/8/8/8/8/8").is_err());
+        assert!(Board::from_fen_placement("x7/8/8/8/8/8/8/8").is_err());
     }
 }

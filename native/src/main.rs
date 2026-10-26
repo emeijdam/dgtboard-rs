@@ -1,10 +1,13 @@
 //! `dgt` — a small demo CLI on top of the `dgtboard` library.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dgtboard::{Board, DgtBoard, Event, MoveTracker, RefereedGame, Ruling, Status};
+use dgtboard::lichess::Lichess;
+use dgtboard::puzzle::{announce, BoardInput, PuzzleSource};
+use dgtboard::{pick_port, Board, DgtBoard, Event, MoveTracker, RefereedGame, Ruling};
 use serialport::SerialPortType;
 
 mod doctor;
@@ -63,6 +66,39 @@ enum Command {
         #[arg(short, long)]
         flip: bool,
     },
+    /// Solve Lichess puzzles on the board. The opponent's replies are printed
+    /// here for you to play on the board. Trainer only: nothing is sent back
+    /// to Lichess, so your puzzle rating is unaffected.
+    Puzzle {
+        /// Serial port path. Auto-detected if omitted.
+        #[arg(short, long)]
+        port: Option<String>,
+        /// Read the board rotated 180° (White at the end away from the cable).
+        #[arg(short, long)]
+        flip: bool,
+        /// Today's daily puzzle (then random ones).
+        #[arg(long, conflicts_with_all = ["id", "theme", "difficulty", "color"])]
+        daily: bool,
+        /// One puzzle by id (then random ones).
+        #[arg(long, conflicts_with_all = ["theme", "difficulty", "color"])]
+        id: Option<String>,
+        /// Puzzle theme or opening for random puzzles, e.g. mateIn2, fork, endgame.
+        #[arg(long)]
+        theme: Option<String>,
+        /// Difficulty relative to your rating.
+        #[arg(long, value_parser = ["easiest", "easier", "normal", "harder", "hardest"])]
+        difficulty: Option<String>,
+        /// Which colour you solve for.
+        #[arg(long, value_parser = ["white", "black"])]
+        color: Option<String>,
+        /// No board: type moves in UCI (e2e4, e1g1, e7e8q) instead.
+        #[arg(long)]
+        keyboard: bool,
+        /// File holding a Lichess API token (else $LICHESS_TOKEN, else anonymous).
+        /// With a token Lichess serves puzzles you haven't seen.
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -76,6 +112,40 @@ fn main() -> Result<()> {
         Command::Watch { port, flip } => watch(port, flip),
         Command::Moves { port, flip } => moves(port, flip),
         Command::Referee { port, flip } => referee(port, flip),
+        Command::Puzzle {
+            port,
+            flip,
+            daily,
+            id,
+            theme,
+            difficulty,
+            color,
+            keyboard,
+            token_file,
+        } => {
+            let lichess = match token_file {
+                Some(path) => Lichess::with_token_file(&path)
+                    .with_context(|| format!("reading token file {}", path.display()))?,
+                None => Lichess::from_env(),
+            };
+            let source = if daily {
+                PuzzleSource::Daily
+            } else if let Some(id) = id {
+                PuzzleSource::Id(id)
+            } else {
+                PuzzleSource::Next {
+                    angle: theme,
+                    difficulty,
+                    color,
+                }
+            };
+            let mut input = if keyboard {
+                BoardInput::keyboard()
+            } else {
+                BoardInput::open_serial(port, flip)?
+            };
+            dgtboard::puzzle::run(&mut input, &lichess, source)
+        }
     }
 }
 
@@ -100,66 +170,6 @@ fn list_ports() -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// DGT's reported USB vendor id (seen on DGT e-Board / USB boards).
-const DGT_VID: u16 = 0x045b;
-
-/// Score a port as a DGT-board candidate; higher is better, `0` = not USB.
-fn dgt_score(p: &serialport::SerialPortInfo) -> u32 {
-    let SerialPortType::UsbPort(info) = &p.port_type else {
-        return 0;
-    };
-    let mut score = 1; // any USB serial port is a weak candidate
-    let looks_dgt = info.vid == DGT_VID
-        || info
-            .product
-            .as_deref()
-            .map(|s| s.to_ascii_lowercase().contains("dgt"))
-            .unwrap_or(false)
-        || info
-            .manufacturer
-            .as_deref()
-            .map(|s| s.to_ascii_lowercase().contains("game technology"))
-            .unwrap_or(false);
-    if looks_dgt {
-        score += 10;
-    }
-    // On macOS both cu.* and tty.* appear; cu.* is the one you want.
-    if p.port_name.contains("cu.") {
-        score += 1;
-    }
-    score
-}
-
-/// Pick a port: use the explicit one, else the best-scoring DGT/USB candidate,
-/// else fail with guidance.
-fn pick_port(explicit: Option<String>) -> Result<String> {
-    if let Some(p) = explicit {
-        return Ok(p);
-    }
-    let ports = dgtboard::available_ports().context("listing serial ports")?;
-    let mut candidates: Vec<_> = ports.iter().map(|p| (dgt_score(p), p)).collect();
-    candidates.retain(|(score, _)| *score > 0);
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-
-    match candidates.as_slice() {
-        [] => bail!("no USB serial ports found. Run `dgt doctor` to diagnose the connection (driver / security), or pass --port."),
-        [(score, best), rest @ ..] => {
-            // Ambiguous only if a different *device* scores equally well; the
-            // cu/tty pair for one device is disambiguated by the cu.* bonus.
-            let tie = rest.iter().any(|(s, _)| s == score);
-            if tie {
-                let names: Vec<_> = candidates.iter().map(|(_, p)| p.port_name.as_str()).collect();
-                bail!(
-                    "multiple equally-likely USB ports found ({}); pass --port to choose one",
-                    names.join(", ")
-                );
-            }
-            eprintln!("Auto-selected port: {}", best.port_name);
-            Ok(best.port_name.clone())
-        }
-    }
 }
 
 fn print_board(board: &Board) {
@@ -263,20 +273,6 @@ fn moves(port: Option<String>, flip: bool) -> Result<()> {
     }
 }
 
-fn announce(status: Status) {
-    match status {
-        Status::Normal => {}
-        Status::Check => println!("     + check"),
-        Status::Checkmate { winner } => {
-            println!("\n     ███  CHECKMATE — {winner} wins  ███\n");
-        }
-        Status::Stalemate => println!("\n     ▒▒▒  STALEMATE — draw  ▒▒▒\n"),
-        Status::DrawInsufficientMaterial => {
-            println!("\n     ▒▒▒  DRAW — insufficient material  ▒▒▒\n");
-        }
-    }
-}
-
 fn referee(port: Option<String>, flip: bool) -> Result<()> {
     let path = pick_port(port)?;
     let mut board = DgtBoard::open(&path)
@@ -313,7 +309,7 @@ fn referee(port: Option<String>, flip: bool) -> Result<()> {
                     println!("  ⚠ ILLEGAL: {uci} is not legal here. Put the piece back to continue.");
                 }
                 Some(Ruling::BackInSync) => println!("  ✓ Back in sync.\n"),
-                None => {}
+                Some(_) | None => {}
             },
             Some(_) => {}
             None => std::thread::sleep(Duration::from_millis(20)),

@@ -213,6 +213,45 @@ cargo run --bin dgt -- referee                  # live: validate moves, flag ill
 `snapshot` and `watch` auto-select the port when exactly one USB serial device
 is present; otherwise pass `--port` (use `list` to find it).
 
+## Lichess puzzles
+
+`dgt puzzle` fetches Lichess puzzles and referees them on the board. You set
+up the position, play your move, and — since a DGT e-board has no lights —
+the opponent's reply is printed in the terminal for you to execute; the tool
+recognises it as the expected move, not a new one. Lichess's acceptance rule
+applies: the solution move, or any move that checkmates.
+
+```sh
+cargo run --bin dgt -- puzzle                        # random puzzles, one after another
+cargo run --bin dgt -- puzzle --daily                # today's daily puzzle first
+cargo run --bin dgt -- puzzle --id m5n0s             # one specific puzzle first
+cargo run --bin dgt -- puzzle --theme mateIn2 --difficulty harder --color white
+cargo run --bin dgt -- puzzle --daily --keyboard     # no board: type moves in UCI
+```
+
+The screen shows the puzzle header (rating, themes, source game and players,
+the last move played), the position as ASCII + FEN, and a live list of the
+squares still to fix until the board matches. Then `✓ Kxh2` for a correct
+move, `✗ Kh1 isn't it (expected Kxh2) — put it back` for a wrong one (the
+puzzle counts a mistake and waits for the position to be restored), and
+`← Black plays Ng4+ — play it on the board …` for the reply. At the end:
+`Solved (3/3 moves, 0 mistakes)`; Enter continues with the next puzzle, `q` quits.
+
+- `--keyboard` runs the whole flow without hardware: type moves as UCI
+  (`e2e4`, `e1g1` or `e1h1` for castling, `e7e8q` for promotion); the move is
+  turned into the lift/place updates a real board would send. `setup` jumps
+  the simulated board back to the expected position; `fen <placement>` sets
+  any position.
+- A Lichess API token is optional. With one (`LICHESS_TOKEN` in the
+  environment, or `--token-file <path>`), Lichess serves puzzles you haven't
+  seen yet. It is only ever sent as the `Authorization` header — never
+  printed; keep the file out of git.
+- This is a trainer. Lichess has no API for submitting a puzzle solve, so
+  nothing is sent back and your puzzle rating is unaffected. Time controls
+  don't apply: take as long as you like.
+- The client makes one request at a time and, on HTTP 429, waits a minute
+  and retries once, as Lichess asks.
+
 ## Protocol notes
 
 - Framing: byte 0 = message id with `0x80` set; bytes 1–2 are 7-bit length

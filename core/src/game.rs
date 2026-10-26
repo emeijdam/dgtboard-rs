@@ -132,6 +132,7 @@ impl DetectedMove {
 }
 
 /// Reconstructs moves from successive physical board states.
+#[derive(Clone, Debug)]
 pub struct MoveTracker {
     confirmed: Board,
     side_to_move: Option<Color>,

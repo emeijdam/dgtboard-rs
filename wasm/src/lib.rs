@@ -62,7 +62,9 @@ impl DgtSession {
                         self.events.push(format!("illegal\t{uci}"));
                     }
                     Some(Ruling::BackInSync) => self.events.push("sync".to_string()),
-                    None => {}
+                    // Expected-move rulings only arise after `expect_move`,
+                    // which the browser demo never calls.
+                    Some(Ruling::ExpectedPlayed { .. }) | Some(Ruling::WrongMove { .. }) | None => {}
                 },
                 _ => {}
             }

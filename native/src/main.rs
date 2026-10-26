@@ -7,7 +7,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dgtboard::lichess::Lichess;
 use dgtboard::puzzle::{announce, BoardInput, PuzzleSource};
-use dgtboard::{pick_port, Board, DgtBoard, Event, MoveTracker, RefereedGame, Ruling};
+use dgtboard::{
+    pick_port, Board, DgtBoard, Event, IllegalReason, MoveTracker, RefereedGame, Ruling,
+};
 use serialport::SerialPortType;
 
 mod doctor;
@@ -273,6 +275,16 @@ fn moves(port: Option<String>, flip: bool) -> Result<()> {
     }
 }
 
+fn reason_text(reason: IllegalReason) -> &'static str {
+    match reason {
+        IllegalReason::NotYourTurn => "it's not your turn",
+        IllegalReason::NoPieceThere => "there was no piece on that square",
+        IllegalReason::MustGetOutOfCheck => "your king is in check",
+        IllegalReason::OwnPieceOnTarget => "your own piece is already there",
+        IllegalReason::IllegalMove => "that piece can't move like that",
+    }
+}
+
 fn referee(port: Option<String>, flip: bool) -> Result<()> {
     let path = pick_port(port)?;
     let mut board = DgtBoard::open(&path)
@@ -305,8 +317,11 @@ fn referee(port: Option<String>, flip: bool) -> Result<()> {
                     println!("{ply:>3}. {mover:<5} {san}");
                     announce(status);
                 }
-                Some(Ruling::Illegal { uci }) => {
-                    println!("  ⚠ ILLEGAL: {uci} is not legal here. Put the piece back to continue.");
+                Some(Ruling::Illegal { uci, reason, .. }) => {
+                    println!(
+                        "  ⚠ ILLEGAL: {uci} — {}. Put the piece back to continue.",
+                        reason_text(reason)
+                    );
                 }
                 Some(Ruling::BackInSync) => println!("  ✓ Back in sync.\n"),
                 Some(_) | None => {}

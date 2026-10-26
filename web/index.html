@@ -33,6 +33,8 @@
     button:disabled { opacity: .4; cursor: default; }
     button.ghost { background: transparent; color: var(--ink); border: 1px solid #313a52; }
     label.flip { color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    select#voicePick { background: var(--panel); color: var(--ink); border: 1px solid #313a52; border-radius: 8px; padding: 8px 10px; font-size: 13px; max-width: 220px; }
+    #voiceTest { padding: 8px 12px; font-size: 13px; }
 
     #board {
       display: grid; grid-template-columns: repeat(8, var(--sq)); grid-template-rows: repeat(8, var(--sq));
@@ -48,6 +50,10 @@
     .sq .piece.white { color: #fafafa; -webkit-text-stroke: 2px #2b2b2b; text-shadow: 0 2px 3px rgba(0,0,0,.35); }
     .sq .piece.black { color: #2b2b2b; -webkit-text-stroke: 2px #111; text-shadow: 0 2px 3px rgba(0,0,0,.25); }
     .sq .coord { position: absolute; bottom: 2px; right: 4px; font-size: 10px; font-weight: 600; color: rgba(0,0,0,.4); }
+    .sq.lastmove { box-shadow: inset 0 0 0 5px rgba(245,210,90,.85); }
+    .sq.illegalsq { box-shadow: inset 0 0 0 5px rgba(229,72,77,.95), inset 0 0 18px rgba(229,72,77,.55); }
+    .sq.matemove { box-shadow: inset 0 0 0 5px rgba(255,180,0,.95), inset 0 0 22px rgba(255,180,0,.5); }
+    /* check wins over the others if a square somehow has both */
     .sq.check { box-shadow: inset 0 0 0 4px #e5484d, inset 0 0 22px rgba(229,72,77,.75); }
 
     @media (max-width: 720px) { #board { --sq: 40px; } }
@@ -87,6 +93,9 @@
         <button id="connect">Connect board</button>
         <button id="disconnect" class="ghost" disabled>Disconnect</button>
         <label class="flip"><input type="checkbox" id="flip" checked /> Flip 180°</label>
+        <label class="flip"><input type="checkbox" id="voice" checked /> 🔊 Uitleg (NL)</label>
+        <select id="voicePick" title="Nederlandse stem"></select>
+        <button id="voiceTest" class="ghost" type="button">Test</button>
       </div>
       <div id="board"></div>
       <div id="banner" class="banner"></div>
@@ -111,7 +120,9 @@
           and approved at the OS level (run <code>dgt doctor</code> if unsure).
           Toggle “Flip 180°” if White shows on the wrong side. Refereeing assumes
           the game starts from the standard position; an illegal move is flagged
-          until you put the piece back.
+          until you put the piece back. “🔊 Uitleg (NL)” has a friendly Dutch
+          voice explain illegal moves to a beginner — best with a Dutch system
+          voice installed.
         </div>
       </div>
     </div>

@@ -547,7 +547,7 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
                             }
                         }
                     }
-                    Some(Ruling::Illegal { uci }) => {
+                    Some(Ruling::Illegal { uci, .. }) => {
                         println!("  ⚠ {uci} is not legal here — put the piece back");
                     }
                     Some(Ruling::BackInSync) => println!("  ✓ Back in position — your move."),

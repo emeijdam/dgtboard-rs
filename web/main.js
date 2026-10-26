@@ -22,6 +22,94 @@ const NL = "\n";
 const $ = (id) => document.getElementById(id);
 let port, reader, writer, session, keepReading = false, gameOver = false, startChecked = false;
 
+// --- Dutch voice coach (Web Speech API) -----------------------------------
+// Speaks a friendly, child-friendly Dutch explanation when an illegal move is
+// played, and a little cheer when the board is fixed.
+const PIECE_NL = {
+  p: ["de", "pion"], n: ["het", "paard"], b: ["de", "loper"],
+  r: ["de", "toren"], q: ["de", "dame"], k: ["de", "koning"],
+};
+let nlVoices = [];
+// Higher score = more preferred: real nl-NL, installed locally (not a flaky
+// remote/network voice).
+function voiceScore(v) {
+  const lang = (v.lang || "").toLowerCase().replace("_", "-");
+  let s = 0;
+  if (lang === "nl-nl") s += 3;
+  else if (lang.startsWith("nl")) s += 2;
+  if (v.localService) s += 1;
+  return s;
+}
+function refreshVoices() {
+  if (!("speechSynthesis" in window)) return;
+  nlVoices = speechSynthesis
+    .getVoices()
+    .filter((v) => (v.lang || "").toLowerCase().startsWith("nl"))
+    .sort((a, b) => voiceScore(b) - voiceScore(a));
+  const sel = $("voicePick");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if (!nlVoices.length) {
+    sel.appendChild(new Option("(geen Nederlandse stem gevonden)", ""));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  nlVoices.forEach((v, i) => sel.appendChild(new Option(`${v.name} (${v.lang})`, String(i))));
+  sel.value = prev && sel.querySelector(`option[value="${prev}"]`) ? prev : "0";
+}
+function chosenVoice() {
+  if (!nlVoices.length) return null;
+  const i = parseInt($("voicePick").value, 10);
+  return nlVoices[Number.isNaN(i) ? 0 : i] || nlVoices[0];
+}
+function speakDutch(text) {
+  if (!$("voice").checked || !("speechSynthesis" in window)) return;
+  if (!nlVoices.length) refreshVoices(); // voices may have loaded late
+  const voice = chosenVoice();
+  speechSynthesis.cancel(); // don't let messages pile up
+  const u = new SpeechSynthesisUtterance(text);
+  // Assign an actual Dutch voice — without this the browser uses its default
+  // (often English) voice and just reads the Dutch text aloud.
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang;
+  } else {
+    u.lang = "nl-NL";
+  }
+  u.rate = 0.95;
+  u.pitch = 1.05;
+  speechSynthesis.speak(u);
+}
+function speakStatus(status) {
+  if (status === "check") {
+    speakDutch("Schaak!");
+  } else if (status.startsWith("checkmate:")) {
+    const winner = status.split(":")[1] === "White" ? "Wit" : "Zwart";
+    speakDutch(`Schaakmat! ${winner} wint. Goed gespeeld!`);
+  } else if (status === "stalemate") {
+    speakDutch("Pat! Niemand kan meer zetten. Het is gelijkspel.");
+  } else if (status === "draw") {
+    speakDutch("Remise. Het is gelijkspel.");
+  }
+}
+
+function illegalDutch(reason, pieceLetter) {
+  const [art, name] = PIECE_NL[pieceLetter] || ["het", "stuk"];
+  switch (reason) {
+    case "turn":
+      return "Wacht even! Het is nog niet jouw beurt. De andere speler is aan zet.";
+    case "nopiece":
+      return "Hmm, op dat vakje stond geen stuk. Zet de stukken even terug zoals ze net stonden.";
+    case "check":
+      return "Pas op! Jouw koning staat schaak. Je moet eerst je koning in veiligheid brengen.";
+    case "own":
+      return "Daar staat al een eigen stuk. Op je eigen stuk mag je niet gaan staan. Kies een ander vakje.";
+    default:
+      return `Oeps! Zo mag ${art} ${name} niet lopen. Zet hem maar terug en probeer een andere zet.`;
+  }
+}
+
 async function main() {
   await init();
   $("version").textContent = "core v" + version();
@@ -34,6 +122,12 @@ async function main() {
   $("connect").addEventListener("click", connect);
   $("disconnect").addEventListener("click", disconnect);
   $("flip").addEventListener("change", onFlipToggle);
+
+  refreshVoices();
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = refreshVoices;
+  $("voiceTest").addEventListener("click", () =>
+    speakDutch("Hallo! Ik leg illegale zetten uit. Probeer maar een zet.")
+  );
 }
 
 // Flipping live: rebuild the session in the new orientation and re-request a
@@ -124,12 +218,23 @@ function render() {
       if (!line) continue;
       const parts = line.split(TAB);
       if (parts[0] === "move") {
-        addMove(parts[1], parts[2], parts[3]); // ply, colour, SAN
+        // move = ply, colour, SAN, status, uci
+        addMove(parts[1], parts[2], parts[3]);
+        const mate = parts[4].startsWith("checkmate");
+        markSquares(parts[5], mate ? "matemove" : "lastmove");
+        clearSquares(mate ? "lastmove" : "matemove");
+        clearSquares("illegalsq");
+        speakStatus(parts[4]);
         if (!gameOver) clearBanner();
       } else if (parts[0] === "illegal" && !gameOver) {
+        // illegal = uci, reason, pieceLetter
         showIllegal(parts[1]);
+        markSquares(parts[1], "illegalsq");
+        speakDutch(illegalDutch(parts[2], parts[3]));
       } else if (parts[0] === "sync") {
         clearBanner();
+        clearSquares("illegalsq");
+        speakDutch("Goed gedaan! Nu klopt het bord weer. Speel maar verder.");
       }
     }
   }
@@ -198,6 +303,28 @@ function highlightCheck(idx) {
   if (idx >= 0 && cells[idx]) cells[idx].classList.add("check");
 }
 
+// Algebraic square ("e4") -> board cell index (0 = a8, matching renderBoard).
+function squareIndex(sq) {
+  const file = sq.charCodeAt(0) - 97; // 'a'
+  const rank = sq.charCodeAt(1) - 48; // '1'
+  if (file < 0 || file > 7 || rank < 1 || rank > 8) return -1;
+  return file + 8 * (8 - rank);
+}
+
+function clearSquares(cls) {
+  for (const c of $("board").children) c.classList.remove(cls);
+}
+
+// Highlight the from/to squares of a UCI move (e.g. "e2e4", "e7e8q").
+function markSquares(uci, cls) {
+  clearSquares(cls);
+  const cells = $("board").children;
+  for (const sq of [uci.slice(0, 2), uci.slice(2, 4)]) {
+    const idx = squareIndex(sq);
+    if (idx >= 0 && cells[idx]) cells[idx].classList.add(cls);
+  }
+}
+
 function banner(text, type) {
   const el = $("banner");
   el.textContent = text;
@@ -258,6 +385,9 @@ function resetGame() {
   $("turn").className = "";
   $("turn").textContent = "";
   highlightCheck(-1);
+  clearSquares("lastmove");
+  clearSquares("matemove");
+  clearSquares("illegalsq");
 }
 
 function setConnected(on) {

@@ -11,10 +11,12 @@
 //! account's puzzle rating is unaffected.
 //!
 //! Everything here also works without a board: [`BoardInput::keyboard`] takes
-//! moves in UCI from stdin and simulates the lift/place field updates.
+//! moves in UCI from stdin and simulates the lift/place field updates. What
+//! the session observes goes to a [`Ui`] as [`Notice`]s (the terminal for the
+//! CLI, the 3D viewer's window otherwise); it never prints itself.
 
 use std::collections::VecDeque;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -22,6 +24,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 
 use crate::lichess::{Lichess, PuzzleAndGame};
+pub use crate::ui::announce;
+use crate::ui::{uci_squares, Notice, Terminal, Ui};
 use crate::{pick_port, Board, Color, DgtBoard, Event, Piece, RefereedGame, Ruling, Square, Status};
 
 /// Which puzzle(s) to fetch.
@@ -276,8 +280,18 @@ pub enum BoardInput {
 
 impl BoardInput {
     /// Open the board on `port` (auto-detected if `None`), read the position
-    /// once and switch to update mode.
+    /// once and switch to update mode. Commands come from stdin.
     pub fn open_serial(port: Option<String>, flip: bool) -> anyhow::Result<BoardInput> {
+        BoardInput::open_serial_with_lines(port, flip, stdin_lines())
+    }
+
+    /// [`open_serial`](Self::open_serial) with commands (`resign`, Enter, `q`,
+    /// …) coming from `lines` instead of stdin — how the 3D viewer drives it.
+    pub fn open_serial_with_lines(
+        port: Option<String>,
+        flip: bool,
+        lines: Receiver<String>,
+    ) -> anyhow::Result<BoardInput> {
         let path = pick_port(port)?;
         let mut board = DgtBoard::open(&path)
             .with_context(|| format!("opening {path}"))?
@@ -286,15 +300,17 @@ impl BoardInput {
             .snapshot(Duration::from_secs(3))
             .context("reading initial board (is the board powered and connected?)")?;
         board.start_updates()?;
-        Ok(BoardInput::Serial {
-            board,
-            lines: stdin_lines(),
-        })
+        Ok(BoardInput::Serial { board, lines })
     }
 
-    /// A keyboard-driven board.
+    /// A keyboard-driven board reading stdin.
     pub fn keyboard() -> BoardInput {
         BoardInput::Keyboard(KeyboardBoard::new())
+    }
+
+    /// A keyboard-driven board reading `lines`.
+    pub fn keyboard_with_lines(lines: Receiver<String>) -> BoardInput {
+        BoardInput::Keyboard(KeyboardBoard::with_lines(lines))
     }
 
     /// Whether this is the keyboard simulation.
@@ -355,21 +371,6 @@ impl BoardInput {
     }
 }
 
-/// Print the check / mate / draw banner for a status, as `dgt referee` does.
-pub fn announce(status: Status) {
-    match status {
-        Status::Normal => {}
-        Status::Check => println!("     + check"),
-        Status::Checkmate { winner } => {
-            println!("\n     ███  CHECKMATE — {winner} wins  ███\n");
-        }
-        Status::Stalemate => println!("\n     ▒▒▒  STALEMATE — draw  ▒▒▒\n"),
-        Status::DrawInsufficientMaterial => {
-            println!("\n     ▒▒▒  DRAW — insufficient material  ▒▒▒\n");
-        }
-    }
-}
-
 /// How a puzzle ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -396,40 +397,41 @@ fn fetch(lichess: &Lichess, source: &PuzzleSource) -> anyhow::Result<PuzzleAndGa
     })
 }
 
-fn print_diff(game: &RefereedGame, board: &Board) {
-    let diff = game.diff(board);
-    if diff.is_empty() {
-        return;
-    }
-    let item = |(sq, want, have): &(Square, Option<Piece>, Option<Piece>)| match (want, have) {
-        (Some(w), None) => format!("{sq}: place {}", w.glyph()),
-        (None, Some(h)) => format!("{sq}: remove {}", h.glyph()),
-        (Some(w), Some(h)) => format!("{sq}: {} → {}", h.glyph(), w.glyph()),
-        (None, None) => unreachable!("diff only lists differing squares"),
-    };
-    println!("  squares to fix: {}", diff.iter().map(item).collect::<Vec<_>>().join(", "));
+/// [`run_with`] on the terminal.
+pub fn run(input: &mut BoardInput, lichess: &Lichess, source: PuzzleSource) -> anyhow::Result<()> {
+    run_with(input, lichess, source, &mut Terminal::new())
 }
 
 /// Fetch puzzles from `source` and solve them on `input` until the user quits.
 /// After a daily or by-id puzzle, Enter continues with random ones.
-pub fn run(input: &mut BoardInput, lichess: &Lichess, source: PuzzleSource) -> anyhow::Result<()> {
+pub fn run_with(
+    input: &mut BoardInput,
+    lichess: &Lichess,
+    source: PuzzleSource,
+    ui: &mut dyn Ui,
+) -> anyhow::Result<()> {
     if input.is_keyboard() {
-        println!("Keyboard mode: type moves in UCI (e2e4, e1g1, e7e8q). `setup` resets the pieces, q quits.\n");
+        ui.notice(Notice::Info(
+            "Keyboard mode: type moves in UCI (e2e4, e1g1, e7e8q). `setup` resets the pieces, q quits.\n".into(),
+        ));
     }
     let mut source = source;
     loop {
         let p = fetch(lichess, &source)?;
-        match solve(input, &p)? {
+        match solve_with(input, &p, ui)? {
             Outcome::Quit => return Ok(()),
             Outcome::Solved { moves, mistakes } => {
                 if mistakes == 0 {
-                    println!("\nSolved ({moves}/{moves} moves, 0 mistakes)");
+                    ui.notice(Notice::Over(format!("Solved ({moves}/{moves} moves, 0 mistakes)")));
                 } else {
-                    println!("\nSolved with {mistakes} mistake{}", if mistakes == 1 { "" } else { "s" });
+                    ui.notice(Notice::Over(format!(
+                        "Solved with {mistakes} mistake{}",
+                        if mistakes == 1 { "" } else { "s" }
+                    )));
                 }
             }
         }
-        println!("Enter for the next puzzle, q to quit");
+        ui.notice(Notice::Waiting("Enter for the next puzzle, q to quit".into()));
         loop {
             match input.wait()? {
                 Poll::Enter => break,
@@ -445,26 +447,87 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, source: PuzzleSource) -> a
                 color: None,
             };
         }
-        println!();
+        ui.notice(Notice::Info(String::new()));
+    }
+}
+
+/// [`solve_with`] on the terminal.
+pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcome> {
+    solve_with(input, p, &mut Terminal::new())
+}
+
+/// One puzzle being solved: the referee plus what renderers need.
+struct Solving<'a> {
+    input: &'a mut BoardInput,
+    ui: &'a mut dyn Ui,
+    game: RefereedGame,
+    solver: Color,
+    /// The last move played (DGT indices), for the snapshot.
+    last_move: Option<(usize, usize)>,
+}
+
+impl Solving<'_> {
+    fn snapshot(&mut self) {
+        self.ui.notice(Notice::Snapshot {
+            expected: self.game.expected_board(),
+            physical: self.input.board().clone(),
+            last_move: self.last_move,
+            check: self.game.checked_square(),
+            turn: self.game.turn(),
+            me: self.solver,
+        });
+    }
+
+    fn setup(&mut self, announce: bool) {
+        self.ui.notice(Notice::Setup {
+            expected: self.game.expected_board(),
+            diff: self.game.diff(self.input.board()),
+            turn: self.game.turn(),
+            plies: None,
+            announce,
+        });
+    }
+
+    /// Wait until the board matches the game again (after a setup request or
+    /// a wrong move). `Err(Quit)` when the user quits.
+    fn wait_in_sync(&mut self) -> anyhow::Result<Result<(), Outcome>> {
+        loop {
+            match self.input.wait()? {
+                Poll::Changed => {
+                    let ruling = self.game.update(self.input.board());
+                    self.snapshot();
+                    match ruling {
+                        Some(Ruling::BackInSync) => {
+                            self.setup(false);
+                            return Ok(Ok(()));
+                        }
+                        _ => self.setup(false),
+                    }
+                }
+                Poll::Quit => return Ok(Err(Outcome::Quit)),
+                Poll::Line(l) => unknown_line(&l),
+                Poll::Enter | Poll::Idle => {}
+            }
+        }
     }
 }
 
 /// Walk one puzzle on the board. Returns when it's solved or the user quits.
-pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcome> {
+pub fn solve_with(input: &mut BoardInput, p: &PuzzleAndGame, ui: &mut dyn Ui) -> anyhow::Result<Outcome> {
     let (puzzle, src) = (&p.puzzle, &p.game);
     let game = RefereedGame::from_fen(&puzzle.fen).map_err(|e| anyhow!("puzzle {}: {e}", puzzle.id))?;
     input.set_position(&game.expected_board());
-    let mut game = game.with_board(input.board());
+    let game = game.with_board(input.board());
 
     // Header.
-    println!(
+    let title = format!(
         "Puzzle {}  ·  rating {}  ·  {} plays  ·  {}",
         puzzle.id,
         puzzle.rating,
         puzzle.plays,
         if puzzle.themes.is_empty() { "-".to_string() } else { puzzle.themes.join(", ") }
     );
-    if !src.players.is_empty() {
+    let source = (!src.players.is_empty()).then(|| {
         let named = |color: &str| {
             src.players
                 .iter()
@@ -482,46 +545,52 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
         if !src.id.is_empty() {
             from.push_str(&format!(" — lichess.org/{}#{}", src.id, puzzle.initial_ply));
         }
-        println!("{from}");
-    }
-    if !puzzle.last_move.is_empty() {
+        from
+    });
+    let last_move = (!puzzle.last_move.is_empty()).then(|| {
         let san = src.pgn.split_whitespace().last().unwrap_or("");
         let shown = if san.is_empty() { puzzle.last_move.clone() } else { format!("{san} ({})", puzzle.last_move) };
-        println!("{} just played {shown}.", game.turn().opposite());
-    }
-    println!();
-    print!("{}", game.expected_board());
-    println!("FEN: {}\n", puzzle.fen);
+        format!("{} just played {shown}.", game.turn().opposite())
+    });
+    let solver = game.turn();
+    ui.notice(Notice::Puzzle {
+        id: puzzle.id.clone(),
+        title,
+        source,
+        last_move,
+        fen: puzzle.fen.clone(),
+        solver,
+    });
+
+    let mut s = Solving {
+        input,
+        ui,
+        game,
+        solver,
+        last_move: uci_squares(&puzzle.last_move),
+    };
+    s.snapshot();
 
     // Setup phase.
-    if !game.in_sync() {
-        println!("Set up this position on the board.");
-        print_diff(&game, input.board());
-        loop {
-            match input.wait()? {
-                Poll::Changed => match game.update(input.board()) {
-                    Some(Ruling::BackInSync) => break,
-                    _ => print_diff(&game, input.board()),
-                },
-                Poll::Quit => return Ok(Outcome::Quit),
-                Poll::Line(l) => unknown_line(&l),
-                Poll::Enter | Poll::Idle => {}
-            }
+    if !s.game.in_sync() {
+        s.ui.notice(Notice::Info("Set up this position on the board.".into()));
+        s.setup(false);
+        if let Err(quit) = s.wait_in_sync()? {
+            return Ok(quit);
         }
     }
-    println!("✓ Position set. {} to move — find the best move.\n", game.turn());
+    s.ui.notice(Notice::Info(format!("✓ Position set. {} to move — find the best move.\n", s.game.turn())));
 
     let mut mistakes = 0;
     let mut moves = 0;
-    let solver = game.turn();
     for (i, ply) in puzzle.solution.iter().enumerate() {
         if i % 2 == 0 {
             // The solver's move.
-            let saved = game.clone();
-            input.set_target(&saved.expected_board());
+            let saved = s.game.clone();
+            s.input.set_target(&saved.expected_board());
             let mated;
             loop {
-                match input.wait()? {
+                match s.input.wait()? {
                     Poll::Quit => return Ok(Outcome::Quit),
                     Poll::Line(l) => {
                         unknown_line(&l);
@@ -530,40 +599,43 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
                     Poll::Enter | Poll::Idle => continue,
                     Poll::Changed => {}
                 }
-                match game.update(input.board()) {
+                let ruling = s.game.update(s.input.board());
+                match ruling {
                     Some(Ruling::Legal { uci, san, status }) => {
                         let mate = matches!(status, Status::Checkmate { .. });
                         if uci == *ply || mate {
-                            println!("  ✓ {san}");
-                            announce(status);
+                            s.last_move = uci_squares(&uci);
+                            s.snapshot();
+                            s.ui.notice(Notice::Correct { san, status });
                             moves += 1;
                             mated = mate;
                             break;
                         }
                         mistakes += 1;
                         let expected = saved.san(ply).unwrap_or_else(|| ply.clone());
-                        println!("  ✗ {san} isn't it (expected {expected}) — put it back");
-                        game = saved.clone().with_board(input.board());
-                        loop {
-                            match input.wait()? {
-                                Poll::Quit => return Ok(Outcome::Quit),
-                                Poll::Line(l) => unknown_line(&l),
-                                Poll::Enter | Poll::Idle => {}
-                                Poll::Changed => match game.update(input.board()) {
-                                    Some(Ruling::BackInSync) => {
-                                        println!("  ✓ Back in position — try again.");
-                                        break;
-                                    }
-                                    _ => print_diff(&game, input.board()),
-                                },
-                            }
+                        s.ui.notice(Notice::Wrong { san, expected });
+                        s.game = saved.clone().with_board(s.input.board());
+                        s.snapshot();
+                        s.setup(false);
+                        if let Err(quit) = s.wait_in_sync()? {
+                            return Ok(quit);
                         }
+                        s.ui.notice(Notice::Info("  ✓ Back in position — try again.".into()));
                     }
                     Some(Ruling::Illegal { uci, .. }) => {
-                        println!("  ⚠ {uci} is not legal here — put the piece back");
+                        s.snapshot();
+                        s.ui.notice(Notice::Illegal {
+                            uci,
+                            reason: None,
+                            piece: None,
+                        });
                     }
-                    Some(Ruling::BackInSync) => println!("  ✓ Back in position — your move."),
-                    Some(Ruling::ExpectedPlayed { .. }) | Some(Ruling::WrongMove { .. }) | None => {}
+                    Some(Ruling::BackInSync) => {
+                        s.snapshot();
+                        s.setup(false);
+                        s.ui.notice(Notice::Info("  ✓ Back in position — your move.".into()));
+                    }
+                    Some(Ruling::ExpectedPlayed { .. }) | Some(Ruling::WrongMove { .. }) | None => s.snapshot(),
                 }
             }
             if mated {
@@ -571,39 +643,39 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
             }
         } else {
             // The opponent's reply: announce it, wait for it on the board.
-            let before = game.clone();
-            let san = game.expect_move(ply).map_err(|e| anyhow!("puzzle {}: {e}", puzzle.id))?;
-            input.set_target(&game.expected_board());
-            let prompt = format!("  ← {} plays {san} — play it on the board …", solver.opposite());
-            print!("{prompt}");
-            io::stdout().flush()?;
+            let before = s.game.clone();
+            let san = s.game.expect_move(ply).map_err(|e| anyhow!("puzzle {}: {e}", puzzle.id))?;
+            s.input.set_target(&s.game.expected_board());
+            s.ui.notice(Notice::Expect {
+                by: solver.opposite(),
+                uci: ply.clone(),
+                san: san.clone(),
+            });
             loop {
-                match input.wait()? {
-                    Poll::Quit => {
-                        println!();
-                        return Ok(Outcome::Quit);
-                    }
-                    Poll::Line(l) => {
-                        println!();
-                        unknown_line(&l);
-                        print!("{prompt}");
-                        io::stdout().flush()?;
-                    }
+                match s.input.wait()? {
+                    Poll::Quit => return Ok(Outcome::Quit),
+                    Poll::Line(l) => unknown_line(&l),
                     Poll::Enter | Poll::Idle => {}
-                    Poll::Changed => match game.update(input.board()) {
-                        Some(Ruling::ExpectedPlayed { status, .. }) => {
-                            println!(" ✓");
-                            announce(status);
-                            break;
+                    Poll::Changed => {
+                        let ruling = s.game.update(s.input.board());
+                        s.snapshot();
+                        match ruling {
+                            Some(Ruling::ExpectedPlayed { status, .. }) => {
+                                s.last_move = uci_squares(ply);
+                                s.snapshot();
+                                s.ui.notice(Notice::Executed { status });
+                                break;
+                            }
+                            Some(Ruling::WrongMove { got, .. }) => {
+                                let got = before.san(&got).unwrap_or(got);
+                                s.ui.notice(Notice::WrongMove {
+                                    got,
+                                    expected: san.clone(),
+                                });
+                            }
+                            _ => {}
                         }
-                        Some(Ruling::WrongMove { got, .. }) => {
-                            let got = before.san(&got).unwrap_or(got);
-                            println!("\n  ⚠ you played {got}, expected {san} — take it back");
-                            print!("{prompt}");
-                            io::stdout().flush()?;
-                        }
-                        _ => {}
-                    },
+                    }
                 }
             }
         }
@@ -698,6 +770,67 @@ mod tests {
         let mut input = BoardInput::Keyboard(KeyboardBoard::with_lines(rx));
         let outcome = solve(&mut input, &p).unwrap();
         assert_eq!(outcome, Outcome::Solved { moves: 2, mistakes: 1 });
+    }
+
+    /// The same scripted puzzle, seen as notices: what a window would get.
+    #[test]
+    fn reports_notices_while_solving() {
+        use crate::ui::Recorder;
+        let p: PuzzleAndGame = serde_json::from_str(
+            r#"{"game":{"pgn":"e4 e5 Nf3 Nc6 Bc4 Nf6","players":[{"name":"a","color":"white","rating":1500},{"name":"b","color":"black"}]},
+                "puzzle":{"id":"T1","fen":"r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+                "lastMove":"g8f6","solution":["c4f7","e8f7","f3g5"]}}"#,
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        for line in ["d2d3", "d3d2", "c4f7", "e8e7", "e7e8", "e8f7", "f3g5"] {
+            tx.send(line.into()).unwrap();
+        }
+        let mut input = BoardInput::Keyboard(KeyboardBoard::with_lines(rx));
+        let mut ui = Recorder::default();
+        assert_eq!(solve_with(&mut input, &p, &mut ui).unwrap(), Outcome::Solved { moves: 2, mistakes: 1 });
+
+        // The story, without the per-change snapshots and setup lists.
+        let story: Vec<String> = ui
+            .notices
+            .iter()
+            .filter_map(|n| match n {
+                Notice::Puzzle { id, solver, .. } => Some(format!("puzzle {id} for {solver}")),
+                Notice::Wrong { san, expected } => Some(format!("wrong {san} (expected {expected})")),
+                Notice::Correct { san, .. } => Some(format!("correct {san}")),
+                Notice::Expect { by, san, .. } => Some(format!("expect {by} {san}")),
+                Notice::WrongMove { got, expected } => Some(format!("wrong-move {got} (expected {expected})")),
+                Notice::Executed { .. } => Some("executed".into()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            story,
+            [
+                "puzzle T1 for White",
+                "wrong d3 (expected Bxf7+)",
+                "correct Bxf7+",
+                "expect Black Kxf7",
+                "wrong-move Ke7 (expected Kxf7)",
+                "executed",
+                "correct Ng5+",
+            ]
+        );
+        // Snapshots carry the last move for highlighting: g8f6 at first, then the plies.
+        let last_moves: Vec<_> = ui
+            .notices
+            .iter()
+            .filter_map(|n| match n {
+                Notice::Snapshot { last_move, .. } => Some(*last_move),
+                _ => None,
+            })
+            .collect();
+        let g8f6 = uci_squares("g8f6");
+        let f3g5 = uci_squares("f3g5");
+        assert_eq!(last_moves.first().copied(), Some(g8f6));
+        assert_eq!(last_moves.last().copied(), Some(f3g5));
+        // While out of position after the wrong move, the setup list named the squares to fix.
+        assert!(ui.notices.iter().any(|n| matches!(n, Notice::Setup { diff, .. } if !diff.is_empty())));
     }
 
     #[test]

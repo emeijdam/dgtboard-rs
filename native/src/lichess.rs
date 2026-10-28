@@ -485,6 +485,14 @@ impl Lichess {
     }
 
     /// Read the token from a file (first line, trimmed).
+    /// `--token-file` when given, else `$LICHESS_TOKEN`, else anonymous.
+    pub fn from_token_file_or_env(path: Option<&std::path::Path>) -> io::Result<Lichess> {
+        match path {
+            Some(p) => Lichess::with_token_file(p),
+            None => Ok(Lichess::from_env()),
+        }
+    }
+
     pub fn with_token_file(path: impl AsRef<std::path::Path>) -> io::Result<Lichess> {
         let text = std::fs::read_to_string(path)?;
         Ok(Lichess::with_token(text.lines().next().unwrap_or("")))

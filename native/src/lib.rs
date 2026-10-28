@@ -37,6 +37,7 @@ use serialport::{SerialPort, SerialPortType};
 pub mod lichess;
 pub mod lichess_game;
 pub mod puzzle;
+pub mod ui;
 
 // Re-export the whole core API so downstream code only needs `dgtboard`.
 pub use dgtboard_core::{

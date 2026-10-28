@@ -2,10 +2,12 @@
 //!
 //! The account's event stream says when a game starts; the game's own stream
 //! then delivers every move. Moves you play on the board are refereed
-//! locally and sent to Lichess; the opponent's moves are printed for you to
+//! locally and sent to Lichess; the opponent's moves are reported for you to
 //! execute (a DGT e-board has no lights), and the referee waits to see them
 //! ([`Ruling::ExpectedPlayed`]). [`RemoteGame`] does the reconciliation; this
-//! module is the terminal UX and the transport.
+//! module is the session logic and the transport. Everything it observes goes
+//! to a [`Ui`] as [`Notice`]s — the terminal for the CLI, the 3D viewer's
+//! window otherwise.
 //!
 //! Quitting leaves the game running on Lichess — nothing is resigned on your
 //! behalf. Type `resign` (or `abort` before the second move) to end it.
@@ -15,7 +17,6 @@
 
 use std::collections::HashSet;
 use std::fmt;
-use std::io::{self, Write};
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -23,8 +24,10 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 
 use crate::lichess::{BoardEvent, GameEvent, GameInfo, GameState, Lichess, LichessError, Seek};
-use crate::puzzle::{announce, unknown_line, BoardInput, Poll};
-use crate::{Board, Color, IllegalReason, Piece, RefereedGame, RemoteEvent, RemoteGame, Ruling, Square};
+use crate::puzzle::{unknown_line, BoardInput, Poll};
+pub use crate::ui::{clock_text, reason_text};
+use crate::ui::{uci_squares, Notice, Terminal, Ui};
+use crate::{Color, RefereedGame, RemoteEvent, RemoteGame, Ruling};
 
 /// Where to create a personal API token with the scope the Board API needs.
 pub const TOKEN_URL: &str =
@@ -85,27 +88,6 @@ pub struct Options {
     pub color: String,
 }
 
-/// A friendly explanation of an [`IllegalReason`].
-pub fn reason_text(reason: IllegalReason) -> &'static str {
-    match reason {
-        IllegalReason::NotYourTurn => "it's not your turn",
-        IllegalReason::NoPieceThere => "there was no piece on that square",
-        IllegalReason::MustGetOutOfCheck => "your king is in check",
-        IllegalReason::OwnPieceOnTarget => "your own piece is already there",
-        IllegalReason::IllegalMove => "that piece can't move like that",
-    }
-}
-
-/// `mm:ss`, or `h:mm:ss` from an hour up.
-pub fn clock_text(ms: u64) -> String {
-    let s = ms / 1000;
-    if s >= 3600 {
-        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
-    } else {
-        format!("{:02}:{:02}", s / 60, s % 60)
-    }
-}
-
 /// A one-line result for a finished state.
 pub fn result_text(state: &GameState) -> String {
     let winner = state.winner.as_deref().map(|w| if w == "white" { "White" } else { "Black" });
@@ -122,35 +104,33 @@ pub fn result_text(state: &GameState) -> String {
     }
 }
 
-fn print_diff(game: &RefereedGame, board: &Board) {
-    let diff = game.diff(board);
-    if diff.is_empty() {
-        return;
-    }
-    let item = |(sq, want, have): &(Square, Option<Piece>, Option<Piece>)| match (want, have) {
-        (Some(w), None) => format!("{sq}: place {}", w.glyph()),
-        (None, Some(h)) => format!("{sq}: remove {}", h.glyph()),
-        (Some(w), Some(h)) => format!("{sq}: {} → {}", h.glyph(), w.glyph()),
-        (None, None) => unreachable!("diff only lists differing squares"),
-    };
-    println!("  squares to fix: {}", diff.iter().map(item).collect::<Vec<_>>().join(", "));
+/// The error for a missing token, with where to get one.
+pub fn token_required() -> anyhow::Error {
+    anyhow!(
+        "a Lichess API token with the board:play scope is required.\n  Create one at {TOKEN_URL}\n  then export LICHESS_TOKEN=<token> or pass --token-file <path>."
+    )
+}
+
+/// [`run_with`] on the terminal.
+pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::Result<()> {
+    run_with(input, lichess, opts, &mut Terminal::new())
 }
 
 /// Log in, get a game (wait, `--ai`, or `--seek`), play it, repeat. Returns
 /// when the user quits, or after the game when one was requested with
 /// `--ai` / `--seek`.
-pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::Result<()> {
+pub fn run_with(input: &mut BoardInput, lichess: &Lichess, opts: Options, ui: &mut dyn Ui) -> anyhow::Result<()> {
     if !lichess.is_authenticated() {
-        bail!(
-            "a Lichess API token with the board:play scope is required.\n  Create one at {TOKEN_URL}\n  then export LICHESS_TOKEN=<token> or pass --token-file <path>."
-        );
+        return Err(token_required());
     }
     let account = lichess
         .account()
         .context("checking the Lichess token (is it valid, with the board:play scope?)")?;
-    println!("Logged in as {}.", account.username);
+    ui.notice(Notice::Info(format!("Logged in as {}.", account.username)));
     if input.is_keyboard() {
-        println!("Keyboard mode: type moves in UCI (e2e4, e1g1, e7e8q); `setup` puts the pieces where they should be, `resign` resigns, q quits.");
+        ui.notice(Notice::Info(
+            "Keyboard mode: type moves in UCI (e2e4, e1g1, e7e8q); `setup` puts the pieces where they should be, `resign` resigns, q quits.".into(),
+        ));
     }
 
     // The event stream first, so a game created below can't slip past it.
@@ -160,7 +140,7 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::
         .context("listing games in progress")?
         .now_playing;
     if let Some(g) = queue.first() {
-        println!("Rejoining game {} already in progress.", g.game_id);
+        ui.notice(Notice::Info(format!("Rejoining game {} already in progress.", g.game_id)));
     }
 
     let mut seek: Option<Seek> = None;
@@ -170,7 +150,10 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::
             let created = lichess
                 .challenge_ai(level, time.minutes * 60, time.increment, &opts.color)
                 .context("challenging Stockfish")?;
-            println!("Challenged Stockfish level {level} ({time}, you play {}) — game {}.", opts.color, created.id);
+            ui.notice(Notice::Info(format!(
+                "Challenged Stockfish level {level} ({time}, you play {}) — game {}.",
+                opts.color, created.id
+            )));
         }
         Start::Seek { time, rated } => {
             seek = Some(
@@ -178,11 +161,11 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::
                     .seek(time.minutes, time.increment, rated, &opts.color)
                     .context("creating the seek")?,
             );
-            println!(
+            ui.notice(Notice::Info(format!(
                 "Seeking a {time} {} game as {} …",
                 if rated { "rated" } else { "casual" },
                 opts.color
-            );
+            )));
         }
     }
     let one_game = !matches!(opts.start, Start::Wait);
@@ -193,15 +176,17 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::
             if finished.contains(&info.game_id) {
                 continue;
             }
-            let outcome = play(input, lichess, &info)?;
+            let outcome = play_with(input, lichess, &info, ui)?;
             finished.insert(info.game_id.clone());
             match outcome {
                 Played::Quit => return Ok(()),
                 Played::Over if one_game => return Ok(()),
-                Played::Over => println!(),
+                Played::Over => ui.notice(Notice::Info(String::new())),
             }
         }
-        println!("Waiting for a game… (start one on lichess.org, or use --ai / --seek)");
+        ui.notice(Notice::Waiting(
+            "Waiting for a game… (start one on lichess.org, or use --ai / --seek)".into(),
+        ));
         loop {
             match events.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(BoardEvent::GameStart { game })) => {
@@ -212,13 +197,15 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::
                 }
                 Ok(Ok(BoardEvent::Challenge { challenge })) => {
                     let from = challenge.challenger.as_ref().map(|c| c.name.as_str()).unwrap_or("someone");
-                    println!("Challenge from {from} — accept it on lichess.org to play it here.");
+                    ui.notice(Notice::Info(format!(
+                        "Challenge from {from} — accept it on lichess.org to play it here."
+                    )));
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(e)) => eprintln!("event stream: {e}"),
+                Ok(Err(e)) => ui.notice(Notice::Info(format!("event stream: {e}"))),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
-                    eprintln!("Lichess closed the event stream; reconnecting …");
+                    ui.notice(Notice::Info("Lichess closed the event stream; reconnecting …".into()));
                     thread::sleep(Duration::from_secs(2));
                     events = lichess.stream_events().context("reopening the Lichess event stream")?;
                 }
@@ -226,7 +213,7 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, opts: Options) -> anyhow::
             if let Some(s) = &seek {
                 if let Some(result) = s.finished() {
                     if let Err(e) = result {
-                        println!("The seek ended: {e}");
+                        ui.notice(Notice::Info(format!("The seek ended: {e}")));
                     }
                     seek = None;
                 }
@@ -249,8 +236,18 @@ pub enum Played {
     Quit,
 }
 
-/// Drive one game on the board until it ends or the user quits.
+/// [`play_with`] on the terminal.
 pub fn play(input: &mut BoardInput, lichess: &Lichess, info: &GameInfo) -> anyhow::Result<Played> {
+    play_with(input, lichess, info, &mut Terminal::new())
+}
+
+/// Drive one game on the board until it ends or the user quits.
+pub fn play_with(
+    input: &mut BoardInput,
+    lichess: &Lichess,
+    info: &GameInfo,
+    ui: &mut dyn Ui,
+) -> anyhow::Result<Played> {
     let id = info.game_id.as_str();
     let me = info.my_color();
     let stream = lichess
@@ -258,7 +255,7 @@ pub fn play(input: &mut BoardInput, lichess: &Lichess, info: &GameInfo) -> anyho
         .with_context(|| format!("opening the stream for game {id}"))?;
 
     // The first record is the whole game.
-    let (initial_fen, header, state) = loop {
+    let (initial_fen, state) = loop {
         match stream.recv_timeout(Duration::from_secs(30)) {
             Ok(Ok(GameEvent::GameFull {
                 clock, white, black, initial_fen, state, rated, speed, ..
@@ -269,18 +266,20 @@ pub fn play(input: &mut BoardInput, lichess: &Lichess, info: &GameInfo) -> anyho
                     who.push_str(&format!(" ({r})"));
                 }
                 let tc = clock.map(|c| c.label()).unwrap_or_else(|| speed.clone());
-                let header = format!(
-                    "Game {id}: you are {me} vs. {who} · {tc}{}",
-                    if rated { " rated" } else { "" }
-                );
-                break (initial_fen, header, state);
+                ui.notice(Notice::Game {
+                    id: id.to_string(),
+                    me,
+                    opponent: who,
+                    time_control: tc,
+                    rated,
+                });
+                break (initial_fen, state);
             }
             Ok(Ok(_)) => continue,
             Ok(Err(e)) => bail!("game {id}: {e}"),
             Err(_) => bail!("game {id}: no game data received"),
         }
     };
-    println!("{header}");
     let initial = (!initial_fen.is_empty() && initial_fen != "startpos").then_some(initial_fen.as_str());
     let remote = RemoteGame::new(initial, me).map_err(|e| anyhow!("game {id}: {e}"))?;
     input.set_position(&remote.game().expected_board());
@@ -290,35 +289,33 @@ pub fn play(input: &mut BoardInput, lichess: &Lichess, info: &GameInfo) -> anyho
         lichess,
         id,
         input,
+        ui,
         remote,
-        prompt: None,
         before_expect: None,
         last: GameState::default(),
         over: false,
     };
     if !session.remote.game().in_sync() {
-        println!("\n{}", session.remote.game().expected_board());
-        println!("Set up this position on the board.");
-        print_diff(session.remote.game(), session.input.board());
+        session.setup(true, None);
     }
     session.apply_state(&state)?;
     if session.over {
         return Ok(Played::Over);
     }
     if session.remote.my_turn() && session.remote.game().in_sync() {
-        println!("  Your move.");
+        session.ui.notice(Notice::YourMove);
     }
+    session.snapshot();
 
     loop {
         loop {
             match stream.try_recv() {
                 Ok(Ok(event)) => session.on_event(event)?,
-                Ok(Err(e)) => eprintln!("game stream: {e}"),
+                Ok(Err(e)) => session.ui.notice(Notice::Info(format!("game stream: {e}"))),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     if !session.over {
-                        session.end_prompt();
-                        println!("Lichess closed the game stream (game {id}).");
+                        session.ui.notice(Notice::Info(format!("Lichess closed the game stream (game {id}).")));
                         return Ok(Played::Over);
                     }
                     break;
@@ -334,8 +331,9 @@ pub fn play(input: &mut BoardInput, lichess: &Lichess, info: &GameInfo) -> anyho
             Poll::Enter => {}
             Poll::Line(line) => session.on_command(&line)?,
             Poll::Quit => {
-                session.end_prompt();
-                println!("Leaving game {id} running on Lichess (not resigned) — lichess.org/{id}");
+                session.ui.notice(Notice::Info(format!(
+                    "Leaving game {id} running on Lichess (not resigned) — lichess.org/{id}"
+                )));
                 return Ok(Played::Quit);
             }
         }
@@ -347,9 +345,8 @@ struct Session<'a> {
     lichess: &'a Lichess,
     id: &'a str,
     input: &'a mut BoardInput,
+    ui: &'a mut dyn Ui,
     remote: RemoteGame,
-    /// The "play it on the board …" line, while an opponent move is pending.
-    prompt: Option<String>,
     /// The game before the pending opponent move, to name a wrong move in SAN.
     before_expect: Option<RefereedGame>,
     /// The previous state, to report offers only when they appear.
@@ -358,44 +355,55 @@ struct Session<'a> {
 }
 
 impl Session<'_> {
-    /// Finish a pending prompt line before printing something else.
-    fn end_prompt(&mut self) {
-        if self.prompt.take().is_some() {
-            println!();
-        }
-    }
-
-    fn show_prompt(&self) {
-        if let Some(p) = &self.prompt {
-            print!("{p}");
-            let _ = io::stdout().flush();
-        }
-    }
-
     fn opponent(&self) -> Color {
         self.remote.me().opposite()
     }
 
+    /// Report the state for renderers.
+    fn snapshot(&mut self) {
+        let game = self.remote.game();
+        self.ui.notice(Notice::Snapshot {
+            expected: game.expected_board(),
+            physical: self.input.board().clone(),
+            last_move: self.remote.moves().last().and_then(|m| uci_squares(m)),
+            check: game.checked_square(),
+            turn: game.turn(),
+            me: self.remote.me(),
+        });
+    }
+
+    /// Report what the board must show (and what differs).
+    fn setup(&mut self, announce: bool, plies: Option<usize>) {
+        let game = self.remote.game();
+        self.ui.notice(Notice::Setup {
+            expected: game.expected_board(),
+            diff: game.diff(self.input.board()),
+            turn: game.turn(),
+            plies,
+            announce,
+        });
+    }
+
     fn on_event(&mut self, event: GameEvent) -> anyhow::Result<()> {
         match event {
-            GameEvent::GameState(state) => self.apply_state(&state)?,
+            GameEvent::GameState(state) => {
+                self.apply_state(&state)?;
+                self.snapshot();
+            }
             GameEvent::ChatLine { username, text, room } if room != "spectator" => {
-                self.end_prompt();
-                println!("  💬 {username}: {text}");
-                self.show_prompt();
+                self.ui.notice(Notice::Info(format!("  💬 {username}: {text}")));
             }
             GameEvent::OpponentGone { gone: true, claim_win_in_seconds } => {
-                self.end_prompt();
-                match claim_win_in_seconds {
-                    Some(s) => println!("  Opponent has left the game — you can claim the win in {s} s on lichess.org/{}", self.id),
-                    None => println!("  Opponent has left the game."),
-                }
-                self.show_prompt();
+                self.ui.notice(Notice::Info(match claim_win_in_seconds {
+                    Some(s) => format!(
+                        "  Opponent has left the game — you can claim the win in {s} s on lichess.org/{}",
+                        self.id
+                    ),
+                    None => "  Opponent has left the game.".into(),
+                }));
             }
             GameEvent::OpponentGone { gone: false, .. } => {
-                self.end_prompt();
-                println!("  Opponent is back.");
-                self.show_prompt();
+                self.ui.notice(Notice::Info("  Opponent is back.".into()));
             }
             GameEvent::GameFull { .. } | GameEvent::ChatLine { .. } | GameEvent::Other => {}
         }
@@ -404,9 +412,7 @@ impl Session<'_> {
 
     /// A new state from Lichess: clocks, offers, moves, result.
     fn apply_state(&mut self, state: &GameState) -> anyhow::Result<()> {
-        self.end_prompt();
-        println!("  ⏱ {} / {}", clock_text(state.wtime), clock_text(state.btime));
-
+        let ongoing = state.is_ongoing();
         let opp = self.opponent();
         let (draw, last_draw) = match opp {
             Color::White => (state.wdraw, self.last.wdraw),
@@ -416,44 +422,47 @@ impl Session<'_> {
             Color::White => (state.wtakeback, self.last.wtakeback),
             Color::Black => (state.btakeback, self.last.btakeback),
         };
-        if draw && !last_draw {
-            println!("  {opp} offers a draw — answer on lichess.org/{}", self.id);
-        }
-        if takeback && !last_takeback {
-            println!("  {opp} proposes a takeback — answer on lichess.org/{}", self.id);
-        }
         self.last = state.clone();
 
         let before = self.remote.game().clone();
-        match self.remote.sync(&state.moves).map_err(|e| anyhow!("game {}: {e}", self.id))? {
+        let event = self.remote.sync(&state.moves).map_err(|e| anyhow!("game {}: {e}", self.id))?;
+        self.ui.notice(Notice::Clocks {
+            white_ms: state.wtime,
+            black_ms: state.btime,
+            ticking: ongoing.then(|| self.remote.game().turn()),
+        });
+        if draw && !last_draw {
+            self.ui.notice(Notice::Info(format!("  {opp} offers a draw — answer on lichess.org/{}", self.id)));
+        }
+        if takeback && !last_takeback {
+            self.ui.notice(Notice::Info(format!(
+                "  {opp} proposes a takeback — answer on lichess.org/{}",
+                self.id
+            )));
+        }
+
+        match event {
             None => {}
-            Some(RemoteEvent::OpponentMoved { san, .. }) => {
+            Some(RemoteEvent::OpponentMoved { uci, san }) => {
                 self.before_expect = Some(before);
                 self.input.set_target(&self.remote.game().expected_board());
-                if state.is_ongoing() {
-                    self.prompt = Some(format!("  ← {opp} plays {san} — play it on the board …"));
-                    self.show_prompt();
+                if ongoing {
+                    self.ui.notice(Notice::Expect { by: opp, uci, san });
                 } else {
-                    println!("  ← {opp} plays {san}");
+                    self.ui.notice(Notice::Info(format!("  ← {opp} plays {san}")));
                 }
             }
             Some(RemoteEvent::Contradicted { ply, sent, server }) => {
-                println!("  ⚠ Lichess has {server} at ply {ply}, not the {sent} sent from here — fix the board");
-                self.resync()?;
+                self.ui.notice(Notice::Info(format!(
+                    "  ⚠ Lichess has {server} at ply {ply}, not the {sent} sent from here — fix the board"
+                )));
+                self.resync(None)?;
             }
-            Some(RemoteEvent::Replaced { plies }) => {
-                println!("\n{}", self.remote.game().expected_board());
-                println!(
-                    "Set up this position on the board ({plies} plies played, {} to move).",
-                    self.remote.game().turn()
-                );
-                self.resync()?;
-            }
+            Some(RemoteEvent::Replaced { plies }) => self.resync(Some(plies))?,
         }
 
-        if !state.is_ongoing() {
-            self.end_prompt();
-            println!("\nGame {} over: {}.", self.id, result_text(state));
+        if !ongoing {
+            self.ui.notice(Notice::Over(format!("Game {} over: {}.", self.id, result_text(state))));
             self.over = true;
         }
         Ok(())
@@ -461,14 +470,14 @@ impl Session<'_> {
 
     /// The position changed under the board: show what to fix (the keyboard
     /// board jumps there at once).
-    fn resync(&mut self) -> anyhow::Result<()> {
+    fn resync(&mut self, plies: Option<usize>) -> anyhow::Result<()> {
         let expected = self.remote.game().expected_board();
         self.input.set_target(&expected);
         if self.input.is_keyboard() {
             self.input.set_position(&expected);
             self.on_board()
         } else {
-            print_diff(self.remote.game(), self.input.board());
+            self.setup(true, plies);
             Ok(())
         }
     }
@@ -477,78 +486,68 @@ impl Session<'_> {
     fn on_board(&mut self) -> anyhow::Result<()> {
         match self.remote.update(self.input.board()) {
             Some(Ruling::Legal { uci, san, status }) => match self.lichess.make_move(self.id, &uci) {
-                Ok(()) => {
-                    println!("  → {san} sent");
-                    announce(status);
-                }
+                Ok(()) => self.ui.notice(Notice::Sent { san, status }),
                 Err(e) => {
                     self.remote.rejected();
                     self.input.set_target(&self.remote.game().expected_board());
-                    match e {
-                        LichessError::Refused(reason) => println!("  ✗ Lichess refused {san}: {reason} — put it back"),
-                        other => println!("  ✗ Sending {san} failed: {other} — put it back and try again"),
-                    }
-                    print_diff(self.remote.game(), self.input.board());
+                    let why = match e {
+                        LichessError::Refused(reason) => reason,
+                        other => format!("{other} — try again"),
+                    };
+                    self.ui.notice(Notice::Refused { san, why });
+                    self.setup(false, None);
                 }
             },
-            Some(Ruling::Illegal { uci, reason, piece }) => {
-                println!(
-                    "  ⚠ {uci} is not legal here — {}. Put the {} back.",
-                    reason_text(reason),
-                    piece.glyph()
-                );
-            }
+            Some(Ruling::Illegal { uci, reason, piece }) => self.ui.notice(Notice::Illegal {
+                uci,
+                reason: Some(reason),
+                piece: Some(piece),
+            }),
             Some(Ruling::BackInSync) => {
-                if self.remote.my_turn() {
-                    println!("  ✓ Board in sync — your move.");
+                self.setup(false, None);
+                self.ui.notice(Notice::Info(if self.remote.my_turn() {
+                    "  ✓ Board in sync — your move.".into()
                 } else {
-                    println!("  ✓ Board in sync.");
-                }
+                    "  ✓ Board in sync.".into()
+                }));
             }
             Some(Ruling::ExpectedPlayed { status, .. }) => {
-                self.prompt = None;
                 self.before_expect = None;
-                println!(" ✓");
-                announce(status);
+                self.ui.notice(Notice::Executed { status });
             }
             Some(Ruling::WrongMove { expected, got }) => {
                 let before = self.before_expect.as_ref();
                 let got = before.and_then(|g| g.san(&got)).unwrap_or(got);
                 let expected = before.and_then(|g| g.san(&expected)).unwrap_or(expected);
-                println!("\n  ⚠ you played {got}, expected {expected} — take it back");
-                self.show_prompt();
+                self.ui.notice(Notice::WrongMove { got, expected });
             }
             None => {
                 if !self.remote.game().in_sync() && self.remote.game().expected_move().is_none() {
-                    print_diff(self.remote.game(), self.input.board());
+                    self.setup(false, None);
                 }
             }
         }
+        self.snapshot();
         Ok(())
     }
 
     /// A typed command.
     fn on_command(&mut self, line: &str) -> anyhow::Result<()> {
-        self.end_prompt();
         match line {
             "resign" => match self.lichess.resign(self.id) {
-                Ok(()) => println!("  Resigned."),
-                Err(e) => println!("  ✗ Resign failed: {e}"),
+                Ok(()) => self.ui.notice(Notice::Info("  Resigned.".into())),
+                Err(e) => self.ui.notice(Notice::Info(format!("  ✗ Resign failed: {e}"))),
             },
             "abort" => match self.lichess.abort(self.id) {
-                Ok(()) => println!("  Aborted."),
-                Err(e) => println!("  ✗ Abort failed: {e}"),
+                Ok(()) => self.ui.notice(Notice::Info("  Aborted.".into())),
+                Err(e) => self.ui.notice(Notice::Info(format!("  ✗ Abort failed: {e}"))),
             },
-            "board" => {
-                println!("{}", self.remote.game().expected_board());
-                print_diff(self.remote.game(), self.input.board());
-            }
+            "board" => self.setup(true, None),
             _ => {
                 unknown_line(line);
-                println!("    In a game: `resign`, `abort`, `board`.");
+                self.ui.notice(Notice::Info("    In a game: `resign`, `abort`, `board`.".into()));
             }
         }
-        self.show_prompt();
         Ok(())
     }
 }

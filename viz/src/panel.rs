@@ -4,6 +4,11 @@
 //! what the key does — and, like the keys, anything that ends or leaves a
 //! game must be **held** for a moment: a bar fills on the button and in the
 //! HUD, and letting go early does nothing. Small hands tap things.
+//!
+//! Every button carries a picture (see `assets/icons/`), so a child who
+//! can't read yet can still use it; the two toggles show what they switch
+//! *to* (the flat board while in 3D, the black king while viewing from
+//! White).
 
 use bevy::prelude::*;
 
@@ -19,6 +24,27 @@ pub struct PanelConfig {
     /// The session is puzzles ("Next puzzle" rather than resign / abort).
     pub puzzle: bool,
 }
+
+/// The button pictures, loaded once.
+#[derive(Resource)]
+pub(super) struct Icons {
+    board_flat: Handle<Image>,
+    board_3d: Handle<Image>,
+    king_black: Handle<Image>,
+    king_white: Handle<Image>,
+    puzzle: Handle<Image>,
+    flag: Handle<Image>,
+    abort: Handle<Image>,
+    quit: Handle<Image>,
+}
+
+/// A button's picture (for the toggles to swap).
+#[derive(Component)]
+pub(super) struct Icon;
+
+/// A button's label (for the toggles to swap).
+#[derive(Component)]
+pub(super) struct Label;
 
 /// What a button does.
 #[derive(Component, Clone, Copy, Debug)]
@@ -63,6 +89,17 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, config: Res
         font_size: size,
         color,
     };
+    let icon = |name: &str| asset_server.load::<Image>(format!("icons/{name}.png"));
+    let icons = Icons {
+        board_flat: icon("board_flat"),
+        board_3d: icon("board_3d"),
+        king_black: icon("king_black"),
+        king_white: icon("king_white"),
+        puzzle: icon("puzzle"),
+        flag: icon("flag"),
+        abort: icon("abort"),
+        quit: icon("quit"),
+    };
 
     commands
         .spawn(NodeBundle {
@@ -82,28 +119,32 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, config: Res
         })
         .with_children(|panel| {
             panel.spawn(TextBundle::from_section("dgt3d", text(17.0, INK)));
-            button(panel, "2D / 3D", Action::ToggleView, ACCENT, ACCENT_HOVER, Color::srgb(0.03, 0.06, 0.12), &text);
-            button(panel, "View from Black", Action::ToggleSide, GHOST, GHOST_HOVER, INK, &text);
+            let b = |panel: &mut ChildBuilder, label, action, bg, hover, ink, img: &Handle<Image>| {
+                button(panel, label, action, bg, hover, ink, &text, img.clone())
+            };
+            b(panel, "2D", Action::ToggleView, ACCENT, ACCENT_HOVER, Color::srgb(0.03, 0.06, 0.12), &icons.board_flat);
+            b(panel, "View from Black", Action::ToggleSide, GHOST, GHOST_HOVER, INK, &icons.king_black);
             if config.session {
                 if config.puzzle {
-                    button(panel, "Next puzzle", Action::Next, GHOST, GHOST_HOVER, INK, &text);
+                    b(panel, "Next puzzle", Action::Next, GHOST, GHOST_HOVER, INK, &icons.puzzle);
                 } else {
-                    button(panel, "Resign", Action::Resign, DANGER, DANGER_HOVER, INK, &text);
-                    button(panel, "Abort", Action::Abort, GHOST, GHOST_HOVER, INK, &text);
+                    b(panel, "Resign", Action::Resign, DANGER, DANGER_HOVER, INK, &icons.flag);
+                    b(panel, "Abort", Action::Abort, GHOST, GHOST_HOVER, INK, &icons.abort);
                 }
-                button(panel, "Quit", Action::Quit, GHOST, GHOST_HOVER, INK, &text);
+                b(panel, "Quit", Action::Quit, GHOST, GHOST_HOVER, INK, &icons.quit);
             }
             let legend = if config.session {
                 if config.puzzle {
-                    "Keys: Tab 2D/3D · F side · Enter next · hold Esc to quit\nHold a red/grey action for a moment to confirm it.\nLeft-drag orbits, scroll zooms."
+                    "Hold a button for a moment to confirm.\nKeys: Tab · F · Enter · Esc (hold)"
                 } else {
-                    "Keys: Tab 2D/3D · F side · hold R to resign · hold A to abort · hold Esc to quit (the game keeps running)\nHold an action for a moment to confirm it.\nLeft-drag orbits, scroll zooms."
+                    "Hold a button for a moment to confirm.\nKeys: Tab · F · R · A · Esc (hold)"
                 }
             } else {
-                "Keys: Tab 2D/3D · F side\nLeft-drag orbits, scroll zooms. Free play is refereed from the start position."
+                "Keys: Tab 2D/3D · F side\nFree play, refereed from the start position."
             };
             panel.spawn(TextBundle::from_section(legend, text(12.0, MUTED)));
         });
+    commands.insert_resource(icons);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -115,12 +156,14 @@ fn button(
     hover: Color,
     ink: Color,
     text: &dyn Fn(f32, Color) -> TextStyle,
+    icon: Handle<Image>,
 ) {
     let mut button = parent.spawn((
         ButtonBundle {
             style: Style {
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
-                justify_content: JustifyContent::Center,
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
                 ..default()
             },
             background_color: background.into(),
@@ -144,8 +187,56 @@ fn button(
         });
     }
     button.with_children(|b| {
-        b.spawn(TextBundle::from_section(label, text(14.0, ink)));
+        b.spawn((
+            ImageBundle {
+                style: Style {
+                    width: Val::Px(30.0),
+                    height: Val::Px(30.0),
+                    ..default()
+                },
+                image: UiImage::new(icon),
+                ..default()
+            },
+            Icon,
+        ));
+        b.spawn((TextBundle::from_section(label, text(15.0, ink)), Label));
     });
+}
+
+/// Keep the two toggles showing what they switch *to*.
+#[allow(clippy::type_complexity)]
+pub fn refresh_toggles(
+    view: Res<View>,
+    icons: Option<Res<Icons>>,
+    buttons: Query<(&Action, &Children)>,
+    mut images: Query<&mut UiImage, With<Icon>>,
+    mut labels: Query<&mut Text, With<Label>>,
+) {
+    let Some(icons) = icons else {
+        return;
+    };
+    if !view.is_changed() {
+        return;
+    }
+    for (action, children) in &buttons {
+        let (icon, label) = match action {
+            Action::ToggleView if view.two_d => (&icons.board_3d, "3D"),
+            Action::ToggleView => (&icons.board_flat, "2D"),
+            Action::ToggleSide if view.from_black => (&icons.king_white, "View from White"),
+            Action::ToggleSide => (&icons.king_black, "View from Black"),
+            _ => continue,
+        };
+        for child in children {
+            if let Ok(mut image) = images.get_mut(*child) {
+                image.texture = icon.clone();
+            }
+            if let Ok(mut text) = labels.get_mut(*child) {
+                if let Some(section) = text.sections.first_mut() {
+                    section.value = label.to_string();
+                }
+            }
+        }
+    }
 }
 
 /// Hover and press feedback, and the instant actions (view, next puzzle).

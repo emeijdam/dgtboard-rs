@@ -89,7 +89,10 @@ pub fn run(options: Options) {
         puzzle: matches!(options.mode, Some(session::Mode::Puzzle(_))),
     })
     .add_systems(Startup, panel::setup)
-    .add_systems(Update, (panel::interact, panel::hold).before(overlay::apply_posted));
+    .add_systems(
+        Update,
+        (panel::interact, panel::hold, panel::refresh_toggles).before(overlay::apply_posted),
+    );
     match options.mode {
         Some(mode) => {
             let handle = session::spawn(mode, options.connection);

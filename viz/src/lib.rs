@@ -42,6 +42,9 @@ use dgtboard_core::{Board, Decoder, Piece};
 
 mod flat;
 pub mod overlay;
+// The on-screen panel is native only; the web page has its own HTML one.
+#[cfg(not(target_arch = "wasm32"))]
+mod panel;
 mod pieces;
 mod referee;
 #[cfg(not(target_arch = "wasm32"))]
@@ -81,6 +84,12 @@ pub fn run(options: Options) {
     FLIP.store(options.connection.flip, Ordering::Relaxed);
     preview_seed();
     let mut app = build_app();
+    app.insert_resource(panel::PanelConfig {
+        session: options.mode.is_some(),
+        puzzle: matches!(options.mode, Some(session::Mode::Puzzle(_))),
+    })
+    .add_systems(Startup, panel::setup)
+    .add_systems(Update, panel::interact.before(overlay::apply_posted));
     match options.mode {
         Some(mode) => {
             let handle = session::spawn(mode, options.connection);

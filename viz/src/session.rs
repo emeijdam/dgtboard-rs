@@ -382,6 +382,52 @@ pub fn notices(session: Option<ResMut<SessionRes>>, mut overlay: ResMut<Overlay>
     }
 }
 
+/// A command for the session, from a key or a panel button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// Resign the Lichess game (asked twice within two seconds).
+    Resign,
+    /// Abort the Lichess game (before the second move).
+    Abort,
+    /// Enter: the next puzzle.
+    Next,
+    /// Quit — leaving a Lichess game running, exactly as the CLI does.
+    Quit,
+}
+
+impl SessionRes {
+    /// Carry out a command; returns whether the window should close.
+    pub fn command(&mut self, command: Command, overlay: &mut Overlay) -> bool {
+        let send = |session: &SessionRes, line: &str| {
+            let _ = session.handle.lines.send(line.to_string());
+        };
+        match command {
+            Command::Resign => {
+                if self.resign_armed.take().is_some() {
+                    send(self, "resign");
+                } else {
+                    self.resign_armed = Some(Instant::now());
+                    self.state.line = "Resign? Press R (or the button) again to confirm.".into();
+                    *overlay = self.state.overlay();
+                }
+                false
+            }
+            Command::Abort => {
+                send(self, "abort");
+                false
+            }
+            Command::Next => {
+                send(self, "");
+                false
+            }
+            Command::Quit => {
+                send(self, "q");
+                true
+            }
+        }
+    }
+}
+
 /// Game keys: `R` twice within two seconds resigns, `A` aborts, `Enter` is
 /// Enter (next puzzle), `Esc` / `Q` quits — leaving a Lichess game running,
 /// exactly as the CLI does.
@@ -394,27 +440,17 @@ pub fn keys(
     let Some(mut session) = session else {
         return;
     };
-    let send = |session: &SessionRes, line: &str| {
-        let _ = session.handle.lines.send(line.to_string());
-    };
-    if keys.just_pressed(KeyCode::KeyR) {
-        if session.resign_armed.take().is_some() {
-            send(&session, "resign");
-        } else {
-            session.resign_armed = Some(Instant::now());
-            session.state.line = "Press R again to resign.".into();
-            *overlay = session.state.overlay();
+    let pressed = [
+        (KeyCode::KeyR, Command::Resign),
+        (KeyCode::KeyA, Command::Abort),
+        (KeyCode::Enter, Command::Next),
+        (KeyCode::Escape, Command::Quit),
+        (KeyCode::KeyQ, Command::Quit),
+    ];
+    for (key, command) in pressed {
+        if keys.just_pressed(key) && session.command(command, &mut overlay) {
+            exit.send(AppExit::Success);
         }
-    }
-    if keys.just_pressed(KeyCode::KeyA) {
-        send(&session, "abort");
-    }
-    if keys.just_pressed(KeyCode::Enter) {
-        send(&session, "");
-    }
-    if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyQ) {
-        send(&session, "q");
-        exit.send(AppExit::Success);
     }
 }
 

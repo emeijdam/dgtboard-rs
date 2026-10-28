@@ -98,9 +98,11 @@ in the HUD and the squares to fix are marked — natively and in the browser.
 
 A panel of buttons at the right edge of the window does the same as the
 keys. Keys: **Tab** switches between the 3D scene and a flat Lichess-style 2D
-board, **F** views from Black's side, **Enter** moves on to the next puzzle,
-**R** twice resigns, **A** aborts, **Esc** quits (a Lichess game is *left
-running*, as with the CLI — nothing is resigned on your behalf). `--keyboard`
+board, **F** views from Black's side, **Enter** moves on to the next puzzle.
+Anything that ends or leaves a game is kid-proof: **hold** **R** to resign,
+**A** to abort, **Esc** to quit (a bar fills for 1.5 s; a tap does nothing),
+and the same for the panel's buttons. Quitting leaves a Lichess game *running*,
+as with the CLI — nothing is resigned on your behalf. `--keyboard`
 replaces the board with UCI moves typed in the terminal, `--port` / `--flip`
 work as for `dgt`, and the token rules are the ones in [Lichess games](#lichess-games).
 

@@ -139,8 +139,6 @@ pub struct SessionRes {
     handle: SessionHandle,
     /// What the overlay is built from, accumulated from the notices.
     state: Bridge,
-    /// When `R` was last pressed, for the two-press resign.
-    resign_armed: Option<Instant>,
 }
 
 impl SessionRes {
@@ -148,7 +146,6 @@ impl SessionRes {
         SessionRes {
             handle,
             state: Bridge::default(),
-            resign_armed: None,
         }
     }
 }
@@ -371,21 +368,12 @@ pub fn notices(session: Option<ResMut<SessionRes>>, mut overlay: ResMut<Overlay>
     if changed {
         *overlay = session.state.overlay();
     }
-    // Disarm a lone `R` after two seconds.
-    if session
-        .resign_armed
-        .is_some_and(|t| t.elapsed().as_secs_f32() > 2.0)
-    {
-        session.resign_armed = None;
-        session.state.line = "Resign cancelled.".into();
-        *overlay = session.state.overlay();
-    }
 }
 
 /// A command for the session, from a key or a panel button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Resign the Lichess game (asked twice within two seconds).
+    /// Resign the Lichess game.
     Resign,
     /// Abort the Lichess game (before the second move).
     Abort,
@@ -395,61 +383,149 @@ pub enum Command {
     Quit,
 }
 
-impl SessionRes {
-    /// Carry out a command; returns whether the window should close.
-    pub fn command(&mut self, command: Command, overlay: &mut Overlay) -> bool {
-        let send = |session: &SessionRes, line: &str| {
-            let _ = session.handle.lines.send(line.to_string());
-        };
-        match command {
-            Command::Resign => {
-                if self.resign_armed.take().is_some() {
-                    send(self, "resign");
-                } else {
-                    self.resign_armed = Some(Instant::now());
-                    self.state.line = "Resign? Press R (or the button) again to confirm.".into();
-                    *overlay = self.state.overlay();
-                }
-                false
-            }
-            Command::Abort => {
-                send(self, "abort");
-                false
-            }
-            Command::Next => {
-                send(self, "");
-                false
-            }
-            Command::Quit => {
-                send(self, "q");
-                true
-            }
+impl Command {
+    /// Whether the command needs a deliberate, held confirmation: anything
+    /// that ends or leaves a game. (Kids click things.)
+    pub fn is_destructive(self) -> bool {
+        !matches!(self, Command::Next)
+    }
+
+    /// What to show while the confirmation is being held.
+    pub fn hold_label(self) -> &'static str {
+        match self {
+            Command::Resign => "Hold to resign",
+            Command::Abort => "Hold to abort",
+            Command::Quit => "Hold to quit",
+            Command::Next => "Next puzzle",
         }
     }
 }
 
-/// Game keys: `R` twice within two seconds resigns, `A` aborts, `Enter` is
-/// Enter (next puzzle), `Esc` / `Q` quits — leaving a Lichess game running,
-/// exactly as the CLI does.
+/// How long a destructive command must be held (key or button) before it
+/// happens. Long enough that a stray tap does nothing, short enough not to
+/// feel like a chore.
+pub const HOLD_SECS: f32 = 1.5;
+
+/// A text progress bar for a hold, `0.0..=1.0`.
+pub fn hold_bar(progress: f32) -> String {
+    const CELLS: usize = 8;
+    let filled = ((progress.clamp(0.0, 1.0) * CELLS as f32).round() as usize).min(CELLS);
+    let mut s = String::with_capacity(CELLS * 3);
+    for i in 0..CELLS {
+        s.push(if i < filled { '▮' } else { '▯' });
+    }
+    s
+}
+
+impl SessionRes {
+    /// Carry out a command; returns whether the window should close. The
+    /// caller has already collected the held confirmation for destructive
+    /// ones.
+    pub fn command(&mut self, command: Command) -> bool {
+        let send = |line: &str| {
+            let _ = self.handle.lines.send(line.to_string());
+        };
+        match command {
+            Command::Resign => send("resign"),
+            Command::Abort => send("abort"),
+            Command::Next => send(""),
+            Command::Quit => send("q"),
+        }
+        command == Command::Quit
+    }
+
+    /// The HUD's current status line.
+    pub fn line(&self) -> &str {
+        &self.state.line
+    }
+
+    /// Show a status line now (a hold in progress, its cancellation).
+    pub fn show_line(&mut self, line: &str, overlay: &mut Overlay) {
+        self.state.line = line.to_string();
+        *overlay = self.state.overlay();
+    }
+}
+
+/// A held confirmation in progress, from a key or a button.
+#[derive(Clone, Debug)]
+pub struct Holding {
+    /// What is being confirmed.
+    pub command: Command,
+    /// When the hold began.
+    pub since: Instant,
+    /// The status line to put back if the hold is released early.
+    pub previous_line: String,
+}
+
+impl Holding {
+    /// Start holding `command`.
+    pub fn start(command: Command, previous_line: &str) -> Holding {
+        Holding {
+            command,
+            since: Instant::now(),
+            previous_line: previous_line.to_string(),
+        }
+    }
+
+    /// How far along the hold is, `0.0..=1.0`.
+    pub fn progress(&self) -> f32 {
+        (self.since.elapsed().as_secs_f32() / HOLD_SECS).min(1.0)
+    }
+
+    /// The line to show while holding.
+    pub fn line(&self) -> String {
+        format!("{} {}", self.command.hold_label(), hold_bar(self.progress()))
+    }
+}
+
+/// Game keys. `Enter` is Enter (next puzzle). `R` (resign), `A` (abort) and
+/// `Esc` / `Q` (quit, leaving a Lichess game running exactly as the CLI
+/// does) must be **held** for [`HOLD_SECS`]: a tap shows the hold bar and
+/// does nothing.
 pub fn keys(
     keys: Res<ButtonInput<KeyCode>>,
     session: Option<ResMut<SessionRes>>,
     mut overlay: ResMut<Overlay>,
     mut exit: EventWriter<AppExit>,
+    mut holding: Local<Option<Holding>>,
 ) {
     let Some(mut session) = session else {
         return;
     };
-    let pressed = [
+    if keys.just_pressed(KeyCode::Enter) {
+        session.command(Command::Next);
+    }
+
+    let destructive = [
         (KeyCode::KeyR, Command::Resign),
         (KeyCode::KeyA, Command::Abort),
-        (KeyCode::Enter, Command::Next),
         (KeyCode::Escape, Command::Quit),
         (KeyCode::KeyQ, Command::Quit),
     ];
-    for (key, command) in pressed {
-        if keys.just_pressed(key) && session.command(command, &mut overlay) {
-            exit.send(AppExit::Success);
+    let down = destructive.iter().find(|(key, _)| keys.pressed(*key)).map(|&(_, c)| c);
+    match (holding.as_ref(), down) {
+        (None, None) => {}
+        (None, Some(command)) => {
+            let h = Holding::start(command, session.line());
+            session.show_line(&h.line(), &mut overlay);
+            *holding = Some(h);
+        }
+        (Some(h), Some(command)) if h.command == command => {
+            if h.progress() >= 1.0 {
+                let h = holding.take().unwrap();
+                session.show_line(&h.previous_line, &mut overlay);
+                if session.command(command) {
+                    exit.send(AppExit::Success);
+                }
+            } else {
+                let line = h.line();
+                session.show_line(&line, &mut overlay);
+            }
+        }
+        (Some(_), _) => {
+            // Released early, or switched keys: nothing happens.
+            let h = holding.take().unwrap();
+            session.show_line(&h.previous_line, &mut overlay);
         }
     }
 }
@@ -467,6 +543,21 @@ mod tests {
 
     fn sq(name: &str) -> usize {
         overlay::square(name).unwrap()
+    }
+
+    /// A tap is nothing; a hold fills the bar and only then counts.
+    #[test]
+    fn holds_fill_a_bar_and_only_complete_after_the_delay() {
+        assert_eq!(hold_bar(0.0), "▯▯▯▯▯▯▯▯");
+        assert_eq!(hold_bar(0.5), "▮▮▮▮▯▯▯▯");
+        assert_eq!(hold_bar(1.0), "▮▮▮▮▮▮▮▮");
+        assert_eq!(hold_bar(7.0), "▮▮▮▮▮▮▮▮");
+        let h = Holding::start(Command::Resign, "Your move.");
+        assert!(h.progress() < 0.2, "a fresh hold is nowhere near done");
+        assert!(h.line().starts_with("Hold to resign ▯"));
+        assert_eq!(h.previous_line, "Your move.");
+        assert!(Command::Resign.is_destructive() && Command::Quit.is_destructive());
+        assert!(!Command::Next.is_destructive());
     }
 
     /// An opponent's move becomes expect marks and a ghost on its destination;

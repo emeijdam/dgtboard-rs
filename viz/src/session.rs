@@ -357,8 +357,13 @@ pub fn notices(session: Option<ResMut<SessionRes>>, mut overlay: ResMut<Overlay>
     loop {
         let next = session.handle.notices.lock().unwrap().try_recv();
         let Ok(notice) = next else { break };
-        if !matches!(notice, Notice::Snapshot { .. }) {
-            info!("session: {notice:?}");
+        // Log the story, not the boards: snapshots are silent and a setup
+        // request is just its count.
+        match &notice {
+            Notice::Snapshot { .. } => {}
+            Notice::Setup { diff, .. } => info!("session: Setup ({} square(s) to fix)", diff.len()),
+            Notice::Puzzle { id, title, .. } => info!("session: Puzzle {id}: {title}"),
+            other => info!("session: {other:?}"),
         }
         session.state.apply(notice);
         changed = true;

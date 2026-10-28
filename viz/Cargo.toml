@@ -23,7 +23,8 @@ dgtboard-core = { path = "../core", version = "0.1.0" }
 
 # Bevy with a hand-picked feature set: just enough for a PBR 3D scene with
 # bloom and shadows plus the glTF loader for the scanned piece set (JPEG
-# textures), no audio / UI / sprites. Per-target features below add the
+# textures), sprites + 2D text for the flat Lichess-style view, and UI + the
+# built-in font for the HUD; no audio. Per-target features below add the
 # platform backend (Metal on macOS comes from bevy_render's wgpu; WebGL2 and
 # x11 are opted in per target since features are additive).
 [dependencies.bevy]
@@ -36,6 +37,10 @@ features = [
     "bevy_pbr",
     "bevy_asset",
     "bevy_gltf",
+    "bevy_sprite",
+    "bevy_text",
+    "bevy_ui",
+    "default_font",
     "jpeg",
     "png",
 ]
@@ -61,3 +66,4 @@ bevy = { version = "0.14", default-features = false, features = ["x11"] }
 dgtboard = { path = "../native", version = "0.1.0" }
 serialport = { workspace = true }
 clap = { workspace = true }
+anyhow = { workspace = true }

@@ -6,7 +6,9 @@
 // `start`) drains those bytes through `dgtboard-core` and reconciles the 3D
 // scene. We only move bytes — all protocol + rendering work lives in Rust.
 
-import init, { start, push_bytes, init_sequence, set_flip } from "./pkg/dgtboard_bevy.js";
+import init, {
+  start, push_bytes, init_sequence, set_flip, set_view, set_side, demo_overlay,
+} from "./pkg/dgtboard_bevy.js";
 
 const $ = (id) => document.getElementById(id);
 let port, reader, writer, keepReading = false, started = false;
@@ -19,6 +21,16 @@ async function main() {
   $("connect").addEventListener("click", connect);
   $("disconnect").addEventListener("click", disconnect);
   $("flip").addEventListener("change", onFlipToggle);
+  $("view").addEventListener("click", () => toggleView("view", set_view));
+  $("side").addEventListener("click", () => toggleView("side", set_side));
+  // A canned mid-game overlay (marks, ghost knight, clocks, HUD) for a look
+  // at the rendering without a game or a board.
+  $("demo").addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!started) return;
+    demo_overlay();
+    setStatus("Demo overlay: e2–e4 just played, Black's Nf6 expected (ghost knight), a piece wanted on d4.");
+  });
   // Boot the scene right away so the start position (and the scanned set, as
   // it streams in) is on screen before any board is connected.
   await bootScene();
@@ -90,6 +102,17 @@ async function onFlipToggle() {
       setStatus("Flip failed: " + e.message, true);
     }
   }
+}
+
+// The 2D/3D and side buttons are toggles; the pressed state mirrors what the
+// wasm was last told (the keys Tab / F change the view too, but only while the
+// canvas has focus, so the buttons are the reliable way in the browser).
+function toggleView(id, apply) {
+  if (!started) return;
+  const btn = $(id);
+  const on = btn.getAttribute("aria-pressed") !== "true";
+  btn.setAttribute("aria-pressed", String(on));
+  apply(on);
 }
 
 async function disconnect() {

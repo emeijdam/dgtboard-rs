@@ -8,6 +8,12 @@
 //! if it's missing — procedurally generated lathe pieces (see [`pieces`]) and
 //! flat tiles stand in.
 //!
+//! Over the board sits an [`overlay`]: square marks, a ghost of the piece the
+//! opponent just moved, and a HUD — plain data in the [`Overlay`] resource
+//! that a game session fills. `Tab` swaps the 3D scene for a flat
+//! Lichess-style board (see [`flat`]) showing the same position and overlay;
+//! `F` views either from Black's side (the [`View`] resource).
+//!
 //! ## Transport
 //!
 //! Rust/wasm can't open a serial port itself, so the browser does: JavaScript
@@ -34,10 +40,15 @@ use dgtboard_core::protocol::{self, cmd};
 use dgtboard_core::Color as PieceColor;
 use dgtboard_core::{Board, Decoder, Piece};
 
+mod flat;
+pub mod overlay;
 mod pieces;
 #[cfg(not(target_arch = "wasm32"))]
 mod serial;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod session;
 mod set;
+pub use overlay::{post_overlay, post_view, Clocks, Hud, Mark, Overlay, View};
 use pieces::{kind_index, lathe, profile, KINDS};
 use set::PieceSet;
 
@@ -50,23 +61,34 @@ static FLIP: AtomicBool = AtomicBool::new(false);
 static RESEED: AtomicBool = AtomicBool::new(false);
 
 /// Native launch options (see `main.rs`).
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default, Clone, Debug)]
 pub struct Options {
-    /// Serial port path; auto-detected when `None`.
-    pub port: Option<String>,
-    /// Read the board rotated 180° (White at the end away from the cable).
-    pub flip: bool,
+    /// How to reach the board (and Lichess).
+    pub connection: session::Connection,
+    /// A Lichess game or puzzle session to run in the window; `None` just
+    /// follows the board.
+    pub mode: Option<session::Mode>,
 }
 
 /// Native entry point (see `main.rs`). Seeds the queue with the start position
-/// so the window opens onto a populated board, starts the serial reader, then
+/// so the window opens onto a populated board, then either starts the serial
+/// reader or a Lichess / puzzle session (which owns the board itself), and
 /// runs the app.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run(options: Options) {
-    FLIP.store(options.flip, Ordering::Relaxed);
+    FLIP.store(options.connection.flip, Ordering::Relaxed);
     preview_seed();
-    serial::spawn_reader(options.port);
-    build_app().run();
+    let mut app = build_app();
+    match options.mode {
+        Some(mode) => {
+            let handle = session::spawn(mode, options.connection);
+            app.insert_resource(session::SessionRes::new(handle))
+                .add_systems(Update, (session::notices, session::keys).before(overlay::apply_posted));
+        }
+        None => serial::spawn_reader(options.connection.port),
+    }
+    app.run();
 }
 
 /// Seed the queue with a start-position board dump so the scene shows pieces
@@ -177,10 +199,36 @@ pub fn build_app() -> App {
         })
         .insert_resource(Orbit::default())
         .insert_resource(BoardRes::new())
-        .add_systems(Startup, (setup, set::start_loading))
+        .init_resource::<Overlay>()
+        .init_resource::<View>()
+        .add_systems(
+            Startup,
+            (
+                setup,
+                set::start_loading,
+                overlay::setup_3d,
+                overlay::setup_hud,
+                flat::setup,
+            ),
+        )
         .add_systems(
             Update,
-            (decode_system, set::resolve_set, sync_system, orbit_camera).chain(),
+            (
+                overlay::apply_posted,
+                overlay::view_keys,
+                overlay::apply_view,
+                decode_system,
+                set::resolve_set,
+                sync_system,
+                orbit_camera,
+                overlay::sync_marks_3d,
+                overlay::sync_ghost_3d,
+                overlay::sync_hud,
+                flat::layout,
+                flat::sync_pieces,
+                flat::sync_overlay,
+            )
+                .chain(),
         );
 
     app
@@ -195,7 +243,7 @@ fn setup(
 ) {
     // HDR camera with bloom and filmic tonemapping (AcesFitted needs no LUT).
     let orbit = Orbit::default();
-    let cam_pos = orbit_position(&orbit);
+    let cam_pos = orbit_position(&orbit, false);
     commands.spawn((
         Camera3dBundle {
             camera: Camera {
@@ -437,12 +485,24 @@ fn spawn_lathe_piece(
     black: bool,
     idx: usize,
 ) -> Entity {
-    let mesh = assets.meshes[kind_index(p)].clone();
     let material = if black {
         assets.black.clone()
     } else {
         assets.white.clone()
     };
+    spawn_lathe_piece_with(commands, assets, p, black, idx, material)
+}
+
+/// [`spawn_lathe_piece`] with an explicit material (the overlay's ghost).
+fn spawn_lathe_piece_with(
+    commands: &mut Commands,
+    assets: &PieceAssets,
+    p: Piece,
+    black: bool,
+    idx: usize,
+    material: Handle<StandardMaterial>,
+) -> Entity {
+    let mesh = assets.meshes[kind_index(p)].clone();
     let mut transform = Transform::from_translation(square_world(idx));
     // Spin black pieces around so any facing detail looks across the board.
     if black {
@@ -459,12 +519,15 @@ fn spawn_lathe_piece(
 }
 
 /// Manual orbit camera: left-drag rotates yaw/pitch, scroll wheel zooms.
+/// Viewing from Black adds a half turn of yaw, so the same drag feels the
+/// same from either side.
 fn orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     mut motion: EventReader<MouseMotion>,
     mut wheel: EventReader<MouseWheel>,
+    view: Res<View>,
     mut orbit: ResMut<Orbit>,
-    mut cam: Query<&mut Transform, With<Camera>>,
+    mut cam: Query<&mut Transform, With<Camera3d>>,
 ) {
     let mut drag = Vec2::ZERO;
     for ev in motion.read() {
@@ -480,7 +543,7 @@ fn orbit_camera(
         };
     }
 
-    let mut changed = false;
+    let mut changed = view.is_changed();
     if buttons.pressed(MouseButton::Left) && drag != Vec2::ZERO {
         orbit.yaw -= drag.x * 0.005;
         orbit.pitch = (orbit.pitch - drag.y * 0.005).clamp(0.08, 1.52);
@@ -494,15 +557,21 @@ fn orbit_camera(
         return;
     }
 
-    let pos = orbit_position(&orbit);
+    let pos = orbit_position(&orbit, view.from_black);
     for mut t in &mut cam {
         *t = Transform::from_translation(pos).looking_at(orbit.target, Vec3::Y);
     }
 }
 
-/// Camera world position from spherical orbit coordinates.
-fn orbit_position(orbit: &Orbit) -> Vec3 {
-    let (sy, cy) = orbit.yaw.sin_cos();
+/// Camera world position from spherical orbit coordinates, turned half way
+/// round the board when viewing from Black.
+fn orbit_position(orbit: &Orbit, from_black: bool) -> Vec3 {
+    let yaw = if from_black {
+        orbit.yaw + std::f32::consts::PI
+    } else {
+        orbit.yaw
+    };
+    let (sy, cy) = yaw.sin_cos();
     let (sp, cp) = orbit.pitch.sin_cos();
     orbit.target + Vec3::new(orbit.radius * cp * sy, orbit.radius * sp, orbit.radius * cp * cy)
 }
@@ -579,5 +648,24 @@ pub mod wasm_api {
     #[wasm_bindgen]
     pub fn init_sequence() -> Vec<u8> {
         vec![cmd::SEND_RESET, cmd::SEND_BRD, cmd::SEND_UPDATE_BRD]
+    }
+
+    /// Show the flat 2D board (`true`) or the 3D scene (`false`).
+    #[wasm_bindgen]
+    pub fn set_view(two_d: bool) {
+        post_view(Some(two_d), None);
+    }
+
+    /// View the board from Black's side (`true`) or White's (`false`).
+    #[wasm_bindgen]
+    pub fn set_side(black: bool) {
+        post_view(None, Some(black));
+    }
+
+    /// Fill the overlay with a canned mid-game state (see [`overlay::demo`])
+    /// so the marks, ghost and HUD can be eyeballed without a game.
+    #[wasm_bindgen]
+    pub fn demo_overlay() {
+        post_overlay(overlay::demo());
     }
 }

@@ -25,5 +25,6 @@ context; localhost counts):
     cd web3d && python3 -m http.server 8000
 
 Then open http://localhost:8000 in Chrome or Edge, click "Connect board",
-and pick the DGT serial port. Left-drag to orbit, scroll to zoom.
+and pick the DGT serial port. Left-drag to orbit, scroll to zoom; "2D / 3D"
+swaps in the flat board, "Demo overlay" shows the marks / ghost / HUD.
 EOF

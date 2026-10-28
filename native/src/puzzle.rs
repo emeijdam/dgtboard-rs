@@ -651,6 +651,7 @@ pub fn solve_with(input: &mut BoardInput, p: &PuzzleAndGame, ui: &mut dyn Ui) ->
                 uci: ply.clone(),
                 san: san.clone(),
             });
+            s.snapshot();
             loop {
                 match s.input.wait()? {
                     Poll::Quit => return Ok(Outcome::Quit),

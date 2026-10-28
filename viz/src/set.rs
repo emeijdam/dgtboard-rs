@@ -228,8 +228,21 @@ pub fn spawn_piece(
     black: bool,
     square: usize,
 ) -> Entity {
-    let piece = &set.pieces[kind_idx];
     let material = if black { set.black.clone() } else { set.white.clone() };
+    spawn_piece_with(commands, set, kind_idx, black, square, material)
+}
+
+/// [`spawn_piece`] with an explicit material — the overlay's ghost uses a
+/// translucent copy of the set's own.
+pub fn spawn_piece_with(
+    commands: &mut Commands,
+    set: &PieceSet,
+    kind_idx: usize,
+    black: bool,
+    square: usize,
+    material: Handle<StandardMaterial>,
+) -> Entity {
+    let piece = &set.pieces[kind_idx];
     let mut root = Transform::from_translation(square_world(square));
     if !black {
         root.rotate_y(std::f32::consts::PI);

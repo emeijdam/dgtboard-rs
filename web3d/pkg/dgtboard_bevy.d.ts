@@ -2,6 +2,12 @@
 /* eslint-disable */
 
 /**
+ * Fill the overlay with a canned mid-game state (see [`overlay::demo`])
+ * so the marks, ghost and HUD can be eyeballed without a game.
+ */
+export function demo_overlay(): void;
+
+/**
  * The bytes to write to the board to begin: reset, request a full dump,
  * then stream field updates.
  */
@@ -19,6 +25,16 @@ export function push_bytes(bytes: Uint8Array): void;
 export function set_flip(flip: boolean): void;
 
 /**
+ * View the board from Black's side (`true`) or White's (`false`).
+ */
+export function set_side(black: boolean): void;
+
+/**
+ * Show the flat 2D board (`true`) or the 3D scene (`false`).
+ */
+export function set_view(two_d: boolean): void;
+
+/**
  * Install a readable panic hook, store the orientation, and run the app.
  * Never returns (the winit event loop takes over).
  */
@@ -31,7 +47,10 @@ export interface InitOutput {
     readonly init_sequence: () => [number, number];
     readonly push_bytes: (a: number, b: number) => void;
     readonly set_flip: (a: number) => void;
+    readonly set_side: (a: number) => void;
+    readonly set_view: (a: number) => void;
     readonly start: (a: number) => void;
+    readonly demo_overlay: () => void;
     readonly wgpu_render_bundle_draw: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wgpu_render_bundle_draw_indexed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly wgpu_render_bundle_set_pipeline: (a: number, b: bigint) => void;
@@ -44,17 +63,17 @@ export interface InitOutput {
     readonly wgpu_render_bundle_pop_debug_group: (a: number) => void;
     readonly wgpu_render_bundle_set_index_buffer: (a: number, b: bigint, c: number, d: bigint, e: bigint) => void;
     readonly wgpu_render_bundle_push_debug_group: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h736d497d75e47ce9: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__hfa7a3a1cb6b4ad90: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_3: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_4: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_5: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_6: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_7: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_8: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h2735bfda68ab361a_9: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h5431dfedf7ebd607: (a: number, b: number) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_c5f4d086bd16ab8f___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___js_sys_f69620c80b62b890___Array__web_sys_b740bca31c095aca___features__gen_ResizeObserver__ResizeObserver______true_: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true_: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__3: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__4: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__5: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__6: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__7: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__8: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke___wasm_bindgen_c5f4d086bd16ab8f___JsValue______true__9: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_c5f4d086bd16ab8f___convert__closures_____invoke_______true_: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_alloc: () => number;

@@ -252,6 +252,71 @@ puzzle counts a mistake and waits for the position to be restored), and
 - The client makes one request at a time and, on HTTP 429, waits a minute
   and retries once, as Lichess asks.
 
+## Lichess games
+
+`dgt lichess` plays Lichess games from the board through the
+[Board API](https://lichess.org/api#tag/Board). Moves you make on the board
+are refereed locally and sent to Lichess; the opponent's moves are printed
+for you to execute, exactly as in `dgt puzzle`:
+
+```
+Logged in as you.
+Waiting for a game… (start one on lichess.org, or use --ai / --seek)
+Game abcd1234: you are White vs. Stockfish level 1 · 15+10
+  ⏱ 15:00 / 15:00
+  Your move.
+  → e4 sent
+  ⏱ 15:00 / 14:52
+  ← Black plays e5 — play it on the board … ✓
+```
+
+```sh
+export LICHESS_TOKEN=lip_…                                   # or --token-file <path>
+cargo run --bin dgt -- lichess                               # wait for a game started on lichess.org
+cargo run --bin dgt -- lichess --ai 3 --color white          # challenge Stockfish (clock: --time 15+10)
+cargo run --bin dgt -- lichess --seek 15+10 --rated          # seek a human opponent
+cargo run --bin dgt -- lichess --ai 1 --color white --keyboard   # no board: type moves in UCI
+```
+
+- **Token.** The Board API needs a personal API token with the `board:play`
+  scope. Create one at
+  <https://lichess.org/account/oauth/token/create?scopes[]=board:play&description=dgtboard>
+  and export it as `LICHESS_TOKEN`, or put it in a file and pass
+  `--token-file <path>`. It is only ever sent as the `Authorization` header —
+  never printed; keep the file out of git. Without a token the command
+  explains this and stops.
+- **Getting a game.** With no options the tool waits for a game to start:
+  accept a challenge or start one on lichess.org (or in the app) and it is
+  picked up here; games already in progress are rejoined. `--ai LEVEL`
+  (1–8) challenges Stockfish with the `--time MIN+INC` clock (default
+  `15+10`); `--seek MIN+INC` looks for a human opponent, `--rated` for a
+  rated game, `--color white|black|random` for both. An incoming challenge
+  is announced but has to be accepted on lichess.org.
+- **Time controls.** Lichess pairs Board API seeks only at rapid or slower
+  (and correspondence); blitz and bullet games are possible against
+  Stockfish or through a direct challenge. The clocks are shown as
+  `⏱ 14:52 / 14:58` (White / Black) after every move.
+- **The opponent's move** is printed as `← Black plays Nf6 — play it on the
+  board …` and ticked `✓` once the board shows it. Playing something else
+  prints `⚠ you played d5, expected e5 — take it back`; the move is not sent.
+  Your own moves are sent when the pieces settle into a legal move
+  (`→ e4 sent`); an illegal one is explained and must be put back. If
+  Lichess refuses a move, or has a different move than the one sent (a
+  takeback was accepted, or you moved on the website), the local position is
+  replaced by Lichess's and the squares to fix are listed until the board
+  matches again — the same setup flow as joining a game mid-way.
+- **Offers.** Draw and takeback offers from the opponent are printed but not
+  answered here: use lichess.org. Chat lines from the opponent are shown.
+- **Ending.** Type `resign` to resign, `abort` to abort (before the second
+  move), `board` to print the expected position. Quitting (`q`, Ctrl-C, or a
+  dropped connection) leaves the game running on Lichess with its clock
+  ticking — nothing is resigned on your behalf; rerun the command to rejoin.
+- **`--keyboard`** runs the whole flow without hardware: type moves as UCI
+  (`e2e4`, `e1g1` or `e1h1` for castling, `e7e8q` for promotion). The
+  initial position is set up automatically, `setup` jumps the simulated
+  board to the expected position (useful after a wrong move), and the
+  opponent's moves still have to be typed in to be ticked off.
+
 ## Protocol notes
 
 - Framing: byte 0 = message id with `0x80` set; bytes 1–2 are 7-bit length

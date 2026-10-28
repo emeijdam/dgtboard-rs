@@ -43,7 +43,7 @@ pub enum PuzzleSource {
 }
 
 /// What [`BoardInput::poll`] observed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Poll {
     /// Nothing happened; sleep a little and poll again.
     Idle,
@@ -53,6 +53,9 @@ pub enum Poll {
     Enter,
     /// The user asked to quit (`q`, or stdin closed).
     Quit,
+    /// The user typed something that isn't a move or a built-in command —
+    /// for the caller to interpret (e.g. `resign` in a Lichess game).
+    Line(String),
 }
 
 /// Read stdin line by line on a background thread.
@@ -151,13 +154,15 @@ impl KeyboardBoard {
                     self.frames = frames;
                     self.poll()
                 }
-                Err(e) => {
-                    println!("  ? {e} — type a UCI move (e2e4, e1g1, e7e8q), `setup`, `fen …`, Enter, or q");
-                    Poll::Idle
-                }
+                Err(_) => Poll::Line(line.to_string()),
             },
         }
     }
+}
+
+/// Explain an unrecognised line, for callers that have no command of their own.
+pub fn unknown_line(line: &str) {
+    println!("  ? {line:?} — type a UCI move (e2e4, e1g1, e7e8q), `setup`, `fen …`, Enter, or q");
 }
 
 impl Default for KeyboardBoard {
@@ -327,7 +332,7 @@ impl BoardInput {
                 match lines.try_recv() {
                     Ok(line) if line.trim().is_empty() => return Ok(Poll::Enter),
                     Ok(line) if matches!(line.trim(), "q" | "quit" | "exit") => return Ok(Poll::Quit),
-                    Ok(_) => {}
+                    Ok(line) => return Ok(Poll::Line(line.trim().to_string())),
                     Err(TryRecvError::Disconnected) => return Ok(Poll::Quit),
                     Err(TryRecvError::Empty) => {}
                 }
@@ -429,6 +434,7 @@ pub fn run(input: &mut BoardInput, lichess: &Lichess, source: PuzzleSource) -> a
             match input.wait()? {
                 Poll::Enter => break,
                 Poll::Quit => return Ok(()),
+                Poll::Line(l) => unknown_line(&l),
                 Poll::Changed | Poll::Idle => {}
             }
         }
@@ -498,6 +504,7 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
                     _ => print_diff(&game, input.board()),
                 },
                 Poll::Quit => return Ok(Outcome::Quit),
+                Poll::Line(l) => unknown_line(&l),
                 Poll::Enter | Poll::Idle => {}
             }
         }
@@ -516,6 +523,10 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
             loop {
                 match input.wait()? {
                     Poll::Quit => return Ok(Outcome::Quit),
+                    Poll::Line(l) => {
+                        unknown_line(&l);
+                        continue;
+                    }
                     Poll::Enter | Poll::Idle => continue,
                     Poll::Changed => {}
                 }
@@ -536,6 +547,7 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
                         loop {
                             match input.wait()? {
                                 Poll::Quit => return Ok(Outcome::Quit),
+                                Poll::Line(l) => unknown_line(&l),
                                 Poll::Enter | Poll::Idle => {}
                                 Poll::Changed => match game.update(input.board()) {
                                     Some(Ruling::BackInSync) => {
@@ -570,6 +582,12 @@ pub fn solve(input: &mut BoardInput, p: &PuzzleAndGame) -> anyhow::Result<Outcom
                     Poll::Quit => {
                         println!();
                         return Ok(Outcome::Quit);
+                    }
+                    Poll::Line(l) => {
+                        println!();
+                        unknown_line(&l);
+                        print!("{prompt}");
+                        io::stdout().flush()?;
                     }
                     Poll::Enter | Poll::Idle => {}
                     Poll::Changed => match game.update(input.board()) {

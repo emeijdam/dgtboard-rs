@@ -8,8 +8,9 @@
 //! re-exported from the core, so you can `use dgtboard::{...}` for everything.
 //!
 //! Beyond the transport: [`pick_port`] auto-selects the board's USB port,
-//! [`lichess`] is a small Lichess API client (puzzles; ndjson streams), and
-//! [`puzzle`] solves Lichess puzzles on the board (or from the keyboard).
+//! [`lichess`] is a small Lichess API client (puzzles; the Board API),
+//! [`puzzle`] solves Lichess puzzles on the board (or from the keyboard), and
+//! [`lichess_game`] plays Lichess games from it.
 //!
 //! ```no_run
 //! use dgtboard::{DgtBoard, Event};
@@ -34,12 +35,14 @@ use std::time::{Duration, Instant};
 use serialport::{SerialPort, SerialPortType};
 
 pub mod lichess;
+pub mod lichess_game;
 pub mod puzzle;
 
 // Re-export the whole core API so downstream code only needs `dgtboard`.
 pub use dgtboard_core::{
-    board, decoder, game, protocol, rules, Board, CastleSide, Color, Decoder, DetectedMove, Event,
-    IllegalReason, MoveKind, MoveTracker, Piece, RefereedGame, Ruling, Square, Status,
+    board, decoder, game, protocol, remote, rules, Board, CastleSide, Color, Decoder, DetectedMove,
+    Event, IllegalReason, MoveKind, MoveTracker, Piece, RefereedGame, RemoteEvent, RemoteGame,
+    Ruling, Square, Status,
 };
 
 /// Errors produced by the native transport.

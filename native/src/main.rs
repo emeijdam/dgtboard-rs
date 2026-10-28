@@ -6,10 +6,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dgtboard::lichess::Lichess;
+use dgtboard::lichess_game::{self, reason_text, Start, TimeControl};
 use dgtboard::puzzle::{announce, BoardInput, PuzzleSource};
-use dgtboard::{
-    pick_port, Board, DgtBoard, Event, IllegalReason, MoveTracker, RefereedGame, Ruling,
-};
+use dgtboard::{pick_port, Board, DgtBoard, Event, MoveTracker, RefereedGame, Ruling};
 use serialport::SerialPortType;
 
 mod doctor;
@@ -101,6 +100,38 @@ enum Command {
         #[arg(long)]
         token_file: Option<PathBuf>,
     },
+    /// Play Lichess games on the board (Board API, token scope board:play).
+    /// Your moves are sent as you play them; the opponent's are printed here
+    /// for you to execute. Quitting leaves the game running on Lichess.
+    Lichess {
+        /// Serial port path. Auto-detected if omitted.
+        #[arg(short, long)]
+        port: Option<String>,
+        /// Read the board rotated 180° (White at the end away from the cable).
+        #[arg(short, long)]
+        flip: bool,
+        /// Challenge Stockfish at this level instead of waiting for a game.
+        #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(1..=8), conflicts_with = "seek")]
+        ai: Option<u8>,
+        /// Clock for --ai, as MIN+INC.
+        #[arg(long, default_value = "15+10", value_name = "MIN+INC")]
+        time: String,
+        /// Seek a human opponent with this clock (rapid or slower, e.g. 15+10).
+        #[arg(long, value_name = "MIN+INC")]
+        seek: Option<String>,
+        /// Your colour for --ai / --seek.
+        #[arg(long, default_value = "random", value_parser = ["white", "black", "random"])]
+        color: String,
+        /// Seek a rated game (with --seek; casual otherwise).
+        #[arg(long, requires = "seek")]
+        rated: bool,
+        /// No board: type moves in UCI (e2e4, e1g1, e7e8q) instead.
+        #[arg(long)]
+        keyboard: bool,
+        /// File holding the Lichess API token (else $LICHESS_TOKEN).
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -147,6 +178,43 @@ fn main() -> Result<()> {
                 BoardInput::open_serial(port, flip)?
             };
             dgtboard::puzzle::run(&mut input, &lichess, source)
+        }
+        Command::Lichess {
+            port,
+            flip,
+            ai,
+            time,
+            seek,
+            color,
+            rated,
+            keyboard,
+            token_file,
+        } => {
+            let lichess = match token_file {
+                Some(path) => Lichess::with_token_file(&path)
+                    .with_context(|| format!("reading token file {}", path.display()))?,
+                None => Lichess::from_env(),
+            };
+            let parse = |s: &str| TimeControl::parse(s).map_err(|e| anyhow::anyhow!("--time/--seek {e}"));
+            let start = if let Some(level) = ai {
+                Start::Ai {
+                    level,
+                    time: parse(&time)?,
+                }
+            } else if let Some(tc) = seek {
+                Start::Seek {
+                    time: parse(&tc)?,
+                    rated,
+                }
+            } else {
+                Start::Wait
+            };
+            let mut input = if keyboard {
+                BoardInput::keyboard()
+            } else {
+                BoardInput::open_serial(port, flip)?
+            };
+            lichess_game::run(&mut input, &lichess, lichess_game::Options { start, color })
         }
     }
 }
@@ -272,16 +340,6 @@ fn moves(port: Option<String>, flip: bool) -> Result<()> {
             Some(_) => {}
             None => std::thread::sleep(Duration::from_millis(20)),
         }
-    }
-}
-
-fn reason_text(reason: IllegalReason) -> &'static str {
-    match reason {
-        IllegalReason::NotYourTurn => "it's not your turn",
-        IllegalReason::NoPieceThere => "there was no piece on that square",
-        IllegalReason::MustGetOutOfCheck => "your king is in check",
-        IllegalReason::OwnPieceOnTarget => "your own piece is already there",
-        IllegalReason::IllegalMove => "that piece can't move like that",
     }
 }
 

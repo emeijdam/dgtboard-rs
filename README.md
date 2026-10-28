@@ -92,6 +92,10 @@ cargo run -p dgtboard-bevy --bin dgt3d -- --lichess --token-file …      # wait
 cargo run -p dgtboard-bevy --bin dgt3d -- --seek 15+10 --token-file …   # seek a human opponent
 ```
 
+Without a session the window referees **free play** on its own, from the
+start position: last move and check are tinted, an illegal move is explained
+in the HUD and the squares to fix are marked — natively and in the browser.
+
 Keys: **Tab** switches between the 3D scene and a flat Lichess-style 2D
 board, **F** views from Black's side, **Enter** moves on to the next puzzle,
 **R** twice resigns, **A** aborts, **Esc** quits (a Lichess game is *left

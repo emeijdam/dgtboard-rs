@@ -43,6 +43,7 @@ use dgtboard_core::{Board, Decoder, Piece};
 mod flat;
 pub mod overlay;
 mod pieces;
+mod referee;
 #[cfg(not(target_arch = "wasm32"))]
 mod serial;
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,9 +87,21 @@ pub fn run(options: Options) {
             app.insert_resource(session::SessionRes::new(handle))
                 .add_systems(Update, (session::notices, session::keys).before(overlay::apply_posted));
         }
-        None => serial::spawn_reader(options.connection.port),
+        None => {
+            serial::spawn_reader(options.connection.port);
+            add_referee(&mut app);
+        }
     }
     app.run();
+}
+
+/// Free play: the local referee draws the overlay from the board alone.
+fn add_referee(app: &mut App) {
+    app.init_resource::<referee::Referee>()
+        .add_systems(
+            Update,
+            referee::system.after(decode_system).before(overlay::sync_marks_3d),
+        );
 }
 
 /// Seed the queue with a start-position board dump so the scene shows pieces
@@ -623,7 +636,9 @@ pub mod wasm_api {
         FLIP.store(flip, Ordering::Relaxed);
         // Show the start position immediately, before any board is connected.
         preview_seed();
-        build_app().run();
+        let mut app = build_app();
+        add_referee(&mut app);
+        app.run();
     }
 
     /// Append a chunk of bytes received from the board to the shared queue.

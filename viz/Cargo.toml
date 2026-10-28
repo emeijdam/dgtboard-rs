@@ -19,7 +19,8 @@ name = "dgt3d"
 path = "src/main.rs"
 
 [dependencies]
-dgtboard-core = { path = "../core", version = "0.1.0" }
+# `rules` for the free-play referee (shakmaty compiles to wasm too).
+dgtboard-core = { path = "../core", version = "0.1.0", features = ["rules"] }
 
 # Bevy with a hand-picked feature set: just enough for a PBR 3D scene with
 # bloom and shadows plus the glTF loader for the scanned piece set (JPEG
